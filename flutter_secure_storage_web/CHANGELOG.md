@@ -1,5 +1,6 @@
-## NEXT
+## 2.1.1
 - Fix potential key skipping in `readAll` when storage is modified concurrently during async decryption by collecting keys synchronously before awaiting.
+- Maintenance: updated repository metadata to the fl-start fork.
 
 ## 2.1.0
 - Updated code style

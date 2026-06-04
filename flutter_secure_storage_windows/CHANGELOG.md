@@ -1,3 +1,8 @@
+## 4.1.1
+- Added the `accountName` option: each namespace is stored in its own DPAPI-encrypted file (`flutter_secure_storage_<accountName>.dat`).
+- Added the `useLocalMachine` option to encrypt with `CRYPTPROTECT_LOCAL_MACHINE` (machine-scoped DPAPI).
+- `useBackwardCompatibility` now only migrates legacy Credential Manager entries for the default namespace, preventing legacy values from leaking across custom namespaces.
+
 ## 4.1.0
 Upgrades deprecated member usage of win32.
 

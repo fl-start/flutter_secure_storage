@@ -1,3 +1,7 @@
+## 0.2.1
+- Invalid keychain query parameter combinations are now logged via `NSLog` and surfaced to Dart as a `FlutterError` (`errSecParam`) instead of calling `fatalError`, which crashed the host app.
+- Replaced a stray `print` with `NSLog` for access-control creation errors.
+
 ## 0.2.0
 - Remove keys regardless of synchronizable state or accessibility constraints.
 

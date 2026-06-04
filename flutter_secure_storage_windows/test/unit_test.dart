@@ -16,8 +16,12 @@ import 'package:path_provider/path_provider.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // Mock path_provider so the DPAPI storage has a stable directory under plain
+  // `flutter test` (no native plugin registrant is available in unit tests).
+  late final Directory supportDir;
+
   FutureOr<void> cleanUpFiles() async {
-    // Clean up current & legacy files.
+    // Clean up current, namespaced, & legacy files.
     final directory = await getApplicationSupportDirectory();
     if (directory.existsSync()) {
       directory
@@ -26,6 +30,7 @@ void main() {
           .where(
             (f) =>
                 path.basename(f.path) == encryptedJsonFileName ||
+                path.basename(f.path).startsWith('flutter_secure_storage_') ||
                 f.path.endsWith('.secure'),
           )
           .forEach((f) => f.deleteSync());
@@ -33,7 +38,24 @@ void main() {
   }
 
   setUpAll(() async {
+    supportDir = Directory.systemTemp.createTempSync('fss_windows_unit_test');
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (methodCall) async => supportDir.path,
+    );
     await cleanUpFiles();
+  });
+
+  tearDownAll(() {
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      null,
+    );
+    if (supportDir.existsSync()) {
+      supportDir.deleteSync(recursive: true);
+    }
   });
 
   tearDown(() async {
@@ -450,7 +472,7 @@ void main() {
               readCalled++;
               return deleteAllCalled > 0
                   ? null
-                  : (call.arguments as Map<String, dynamic>)['key'] == oldKey
+                  : (call.arguments as Map)['key'] == oldKey
                       ? oldValue
                       : null;
             case 'readAll':
@@ -741,8 +763,7 @@ void main() {
           switch (call.method) {
             case 'containsKey':
               containsKeyCalled++;
-              return deleteCalled > 0 &&
-                  (call.arguments as Map<String, dynamic>)['key'] == key;
+              return deleteCalled > 0 && (call.arguments as Map)['key'] == key;
             case 'delete':
               deleteCalled++;
               return null;
@@ -779,7 +800,7 @@ void main() {
           switch (call.method) {
             case 'containsKey':
               containsKeyCalled++;
-              return (call.arguments as Map<String, dynamic>)['key'] == key;
+              return (call.arguments as Map)['key'] == key;
             default:
               fail('Unexpected method call: ${call.method}');
           }

@@ -1,3 +1,6 @@
+## 2.0.2
+- Maintenance: updated repository metadata to the fl-start fork; version alignment with platform packages.
+
 ## 2.0.1
 Remove dart:io to support WASM build of web.
 

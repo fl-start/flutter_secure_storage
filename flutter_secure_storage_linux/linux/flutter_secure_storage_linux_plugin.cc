@@ -213,11 +213,17 @@ static void flutter_secure_storage_linux_plugin_handle_method_call(
         response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
       }
     }
-    catch (const gchar *e)
+    catch (const std::string &e)
     {
-      g_warning("libsecret_error: %s", e);
+      g_warning("libsecret_error: %s", e.c_str());
       response = FL_METHOD_RESPONSE(
-          fl_method_error_response_new("Libsecret error", e, nullptr));
+          fl_method_error_response_new("Libsecret error", e.c_str(), nullptr));
+    }
+    catch (const std::exception &e)
+    {
+      g_warning("libsecret_error: %s", e.what());
+      response = FL_METHOD_RESPONSE(
+          fl_method_error_response_new("Libsecret error", e.what(), nullptr));
     }
     fl_method_call_respond(method_call, response, nullptr);
   }

@@ -4,7 +4,8 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kDebugMode, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage_platform_interface.dart';
 import 'package:path/path.dart' as path;
@@ -31,9 +32,33 @@ extension OptionsExtension on Map<String, String> {
   int get dpapiFlags => useLocalMachine ? 0x4 : 0;
 
   /// Namespace for the on-disk JSON file (see [encryptedJsonFileName]).
-  String get accountName =>
-      this['accountName'] ?? 'flutter_secure_storage_service';
+  String get accountName => this['accountName'] ?? defaultWindowsAccountName;
+
+  /// Legacy Credential Manager entries were never namespaced, so migration is
+  /// only safe for the default namespace. Enabling `useBackwardCompatibility`
+  /// on a custom [accountName] is ignored (otherwise legacy values would leak
+  /// into whichever namespace read them first).
+  bool get legacyMigrationEnabled {
+    if (!useBackwardCompatibility) {
+      return false;
+    }
+    if (accountName != defaultWindowsAccountName) {
+      if (kDebugMode) {
+        debugPrint(
+          'flutter_secure_storage: useBackwardCompatibility is ignored for '
+          'accountName "$accountName"; legacy migration only runs for the '
+          'default namespace ("$defaultWindowsAccountName").',
+        );
+      }
+      return false;
+    }
+    return true;
+  }
 }
+
+/// Default Windows namespace; matches `WindowsOptions.defaultAccountName`.
+@visibleForTesting
+const String defaultWindowsAccountName = 'flutter_secure_storage_service';
 
 /// The `FlutterSecureStorageWindows` class provides a Windows-specific
 /// implementation of the `FlutterSecureStoragePlatform` interface.
@@ -84,7 +109,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
       return true;
     }
 
-    if (options.useBackwardCompatibility) {
+    if (options.legacyMigrationEnabled) {
       return _backwardCompatible.containsKey(key: key, options: options);
     }
 
@@ -103,7 +128,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
       await _storage.save(map, options);
     }
 
-    if (options.useBackwardCompatibility) {
+    if (options.legacyMigrationEnabled) {
       await _backwardCompatible.delete(key: key, options: options);
     }
   }
@@ -112,7 +137,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
   Future<void> deleteAll({required Map<String, String> options}) async {
     await _storage.clear(options);
 
-    if (options.useBackwardCompatibility) {
+    if (options.legacyMigrationEnabled) {
       await _backwardCompatible.deleteAll(options: options);
     }
   }
@@ -125,7 +150,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
     final map = await _storage.load(options);
 
     var result = map[key];
-    if (options.useBackwardCompatibility) {
+    if (options.legacyMigrationEnabled) {
       if (result == null) {
         final compatible =
             await _backwardCompatible.read(key: key, options: options);
@@ -149,7 +174,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
     required Map<String, String> options,
   }) async {
     final map = await _storage.load(options);
-    if (!options.useBackwardCompatibility) {
+    if (!options.legacyMigrationEnabled) {
       // Just return a map.
       return map;
     }
@@ -183,7 +208,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
     map[key] = value;
     await _storage.save(map, options);
 
-    if (options.useBackwardCompatibility) {
+    if (options.legacyMigrationEnabled) {
       // Clear old entry.
       await _backwardCompatible.delete(key: key, options: options);
     }
@@ -243,9 +268,17 @@ abstract class MapStorage {
 @visibleForTesting
 const String encryptedJsonFileName = 'flutter_secure_storage.dat';
 
-/// Builds the DPAPI JSON filename for [options]'s [OptionsExtension.accountName].
+/// Builds the DPAPI JSON filename for the [OptionsExtension.accountName]
+/// in [options].
+///
+/// The default namespace keeps the legacy [encryptedJsonFileName] so existing
+/// installs continue to read their data after upgrading. Custom namespaces get
+/// a per-account file.
 @visibleForTesting
 String encryptedJsonFileNameForOptions(Map<String, String> options) {
+  if (options.accountName == defaultWindowsAccountName) {
+    return encryptedJsonFileName;
+  }
   final safe = options.accountName.replaceAll(RegExp(r'[^\w\-.]'), '_');
   return 'flutter_secure_storage_$safe.dat';
 }

@@ -138,7 +138,7 @@ class FlutterSecureStorage {
         var error: Unmanaged<CFError>?
         let accessControl = SecAccessControlCreateWithFlags(nil, protection, flags, &error)
         if let error = error?.takeRetainedValue() {
-            print("Error creating access control: \(error.localizedDescription)")
+            NSLog("flutter_secure_storage: error creating access control: \(error.localizedDescription)")
             return nil
         }
         return accessControl
@@ -146,11 +146,13 @@ class FlutterSecureStorage {
 
     /// Constructs a keychain query dictionary from the given parameters.
     private func baseQuery(from params: KeychainQueryParameters) -> [CFString: Any] {
-        // Validate parameters
+        // Validate parameters. On a contradictory combination we log and
+        // continue: the Keychain call will return errSecParam, which surfaces
+        // to Dart as a FlutterError instead of crashing the host app.
         do {
             try validateQueryParameters(params: params)
         } catch {
-            fatalError("Validation failed: \(error)")
+            NSLog("flutter_secure_storage: invalid keychain query parameters: \(error)")
         }
         
         var query: [CFString: Any] = [kSecClass: kSecClassGenericPassword]

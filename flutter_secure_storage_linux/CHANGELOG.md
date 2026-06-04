@@ -1,3 +1,9 @@
+## 3.0.1
+- Added support for the `accountName` option to isolate secrets into separate libsecret keyring entries (namespaces).
+- Fixed a use-after-free: libsecret error messages are now copied before being thrown (previously the thrown pointer was freed during stack unwinding).
+- `warmupKeyring` now runs once per process instead of on every read/contains/delete, avoiding redundant keyring writes and prompts.
+- Hardened `SecretStorage` against dangling schema pointers (`setLabel` rebuilds the schema; copy/move disabled).
+
 ## 3.0.0
 - Fixed whitespace deprecation warning.
 - Reverted json.dump with indentations due to problems. If still needed, pin version to 2.x

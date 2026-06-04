@@ -2,6 +2,7 @@
 #include "json.hpp"
 #include <libsecret/secret.h>
 #include <memory>
+#include <string>
 
 #define secret_autofree _GLIB_CLEANUP(secret_cleanup_free)
 static inline void secret_cleanup_free(gchar **p) { secret_password_free(*p); }
@@ -11,16 +12,32 @@ class SecretStorage {
   std::string label;
   SecretSchema the_schema;
 
-public:
-  const char *getLabel() { return label.c_str(); }
-  void setLabel(const char *label) { this->label = label; }
-
-  SecretStorage(const char *_label = "default") : label(_label) {
+  // Rebuilds the schema so that `the_schema.name` points at the current
+  // `label` storage. Must be called whenever `label` changes.
+  void rebuildSchema() {
     the_schema = {label.c_str(),
                   SECRET_SCHEMA_NONE,
                   {
                       {"account", SECRET_SCHEMA_ATTRIBUTE_STRING},
                   }};
+  }
+
+public:
+  // `the_schema.name` holds a pointer into `label`; copying/moving would
+  // dangle it. Instances are owned via pointers (see the plugin's keyring map).
+  SecretStorage(const SecretStorage &) = delete;
+  SecretStorage &operator=(const SecretStorage &) = delete;
+  SecretStorage(SecretStorage &&) = delete;
+  SecretStorage &operator=(SecretStorage &&) = delete;
+
+  const char *getLabel() { return label.c_str(); }
+  void setLabel(const char *label) {
+    this->label = label;
+    rebuildSchema();
+  }
+
+  SecretStorage(const char *_label = "default") : label(_label) {
+    rebuildSchema();
   }
 
   void addAttribute(const char *key, const char *value) {
@@ -67,7 +84,9 @@ public:
         output.c_str(), nullptr, &err);
 
     if (err) {
-      throw err->message;
+      // Copy the message: `err` is freed by g_autoptr as the stack unwinds,
+      // so throwing `err->message` directly would dangle.
+      throw std::string(err->message);
     }
 
     return result;
@@ -83,7 +102,7 @@ public:
         &the_schema, m_attributes.getGHashTable(), nullptr, &err);
 
     if (err) {
-      throw err->message;
+      throw std::string(err->message);
     }
     if(result != NULL && strcmp(result, "") != 0){
       value = nlohmann::json::parse(result);
@@ -99,7 +118,16 @@ private:
   // a workaround as implemented in http://crbug.com/660005. Reason being that with the lookup
   // approach we can't distinguish whether the keyring was actually unlocked or whether the user
   // cancelled the password prompt.
+  //
+  // The keyring only needs to be unlocked once per process, so guard the dummy
+  // write with a static flag to avoid an extra store (and possible prompt) on
+  // every read/contains/delete.
   void warmupKeyring() {
+    static bool warmedUp = false;
+    if (warmedUp) {
+      return;
+    }
+
     g_autoptr(GError) err = nullptr;
 
     FHashTable attributes;
@@ -115,7 +143,9 @@ private:
         "The meaning of life", nullptr, &err);
 
     if (!success) {
-      throw "Failed to unlock the keyring";
+      throw std::string("Failed to unlock the keyring");
     }
+
+    warmedUp = true;
   }
 };

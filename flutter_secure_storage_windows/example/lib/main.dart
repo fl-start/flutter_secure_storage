@@ -10,7 +10,7 @@ void main() {
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   State<MyApp> createState() => MyAppState();
@@ -330,12 +330,12 @@ class LabeledCheckbox extends StatefulWidget {
   final bool initialValue;
   final ValueChanged<bool>? onChanged;
   const LabeledCheckbox({
-    Key? key,
+    super.key,
     required this.label,
     this.padding = const EdgeInsets.all(4),
     this.initialValue = false,
     this.onChanged,
-  }) : super(key: key);
+  });
 
   @override
   State<StatefulWidget> createState() => LabeledCheckboxState._();

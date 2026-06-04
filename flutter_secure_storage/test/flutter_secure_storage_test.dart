@@ -755,6 +755,8 @@ void main() {
 
       expect(options.toMap(), {
         'useBackwardCompatibility': 'false',
+        'useLocalMachine': 'false',
+        'accountName': 'flutter_secure_storage_service',
       });
     });
 
@@ -763,6 +765,21 @@ void main() {
 
       expect(options.toMap(), {
         'useBackwardCompatibility': 'true',
+        'useLocalMachine': 'false',
+        'accountName': 'flutter_secure_storage_service',
+      });
+    });
+
+    test('WindowsOptions with accountName and useLocalMachine', () {
+      const options = WindowsOptions(
+        accountName: 'secmail.crypto',
+        useLocalMachine: true,
+      );
+
+      expect(options.toMap(), {
+        'useBackwardCompatibility': 'false',
+        'useLocalMachine': 'true',
+        'accountName': 'secmail.crypto',
       });
     });
 
@@ -773,6 +790,8 @@ void main() {
 
       expect(copied.toMap(), {
         'useBackwardCompatibility': 'true',
+        'useLocalMachine': 'false',
+        'accountName': 'flutter_secure_storage_service',
       });
     });
 
@@ -908,7 +927,15 @@ void main() {
       // ignore: use_named_constants
       const options = LinuxOptions();
 
-      expect(options.toMap(), <String, String>{});
+      expect(options.toMap(), {
+        'accountName': 'flutter_secure_storage_service',
+      });
+    });
+
+    test('LinuxOptions with custom accountName', () {
+      const options = LinuxOptions(accountName: 'secmail.crypto');
+
+      expect(options.toMap(), {'accountName': 'secmail.crypto'});
     });
 
     test('linuxOptions defaultOptions matches default constructor', () {

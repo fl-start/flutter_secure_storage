@@ -1,0 +1,61 @@
+name: Desktop Smoke
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  windows_unit:
+    name: Windows DPAPI unit tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Run Windows package tests
+        working-directory: flutter_secure_storage_windows
+        run: flutter test
+
+  linux_build:
+    name: Linux plugin build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install libsecret
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build Linux example
+        working-directory: flutter_secure_storage/example
+        run: |
+          flutter pub get
+          flutter build linux --debug
+
+  macos_build:
+    name: macOS plugin build
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build macOS example
+        working-directory: flutter_secure_storage/example
+        run: |
+          flutter pub get
+          flutter build macos --debug

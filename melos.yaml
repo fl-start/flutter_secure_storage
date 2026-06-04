@@ -1,5 +1,5 @@
 name: flutter_secure_storage
-repository: https://github.com/mogol/flutter_secure_storage
+repository: https://github.com/fl-start/flutter_secure_storage
 
 packages:
   - flutter_secure_storage

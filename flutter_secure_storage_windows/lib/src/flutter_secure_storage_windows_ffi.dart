@@ -23,6 +23,16 @@ extension OptionsExtension on Map<String, String> {
   /// - `false` otherwise.
   bool get useBackwardCompatibility =>
       this['useBackwardCompatibility'] != 'false';
+
+  /// DPAPI scope: machine-wide when `useLocalMachine` is `'true'`.
+  bool get useLocalMachine => this['useLocalMachine'] == 'true';
+
+  /// Win32 `CRYPTPROTECT_LOCAL_MACHINE` (0x4).
+  int get dpapiFlags => useLocalMachine ? 0x4 : 0;
+
+  /// Namespace for the on-disk JSON file (see [encryptedJsonFileName]).
+  String get accountName =>
+      this['accountName'] ?? 'flutter_secure_storage_service';
 }
 
 /// The `FlutterSecureStorageWindows` class provides a Windows-specific
@@ -227,11 +237,18 @@ abstract class MapStorage {
   FutureOr<void> clear(Map<String, String> options);
 }
 
-/// The file name used to store encrypted JSON data.
+/// Default file name used to store encrypted JSON data (default namespace).
 ///
-/// This constant is exposed for testing purposes.
+/// Exposed for testing; prefer [encryptedJsonFileNameForOptions].
 @visibleForTesting
 const String encryptedJsonFileName = 'flutter_secure_storage.dat';
+
+/// Builds the DPAPI JSON filename for [options]'s [OptionsExtension.accountName].
+@visibleForTesting
+String encryptedJsonFileNameForOptions(Map<String, String> options) {
+  final safe = options.accountName.replaceAll(RegExp(r'[^\w\-.]'), '_');
+  return 'flutter_secure_storage_$safe.dat';
+}
 
 /// A `MapStorage` implementation that uses DPAPI (Data Protection API) for
 /// encryption and stores data in a JSON file on disk.
@@ -249,20 +266,20 @@ class DpapiJsonFileMapStorage extends MapStorage {
   ///
   /// Returns:
   /// - A [FutureOr] resolving to the canonical file path as a string.
-  FutureOr<String> _getJsonFilePath() async {
+  FutureOr<String> _getJsonFilePath(Map<String, String> options) async {
     final appDataDirectory = await getApplicationSupportDirectory();
 
     return path.canonicalize(
       path.join(
         appDataDirectory.path,
-        encryptedJsonFileName,
+        encryptedJsonFileNameForOptions(options),
       ),
     );
   }
 
   @override
   FutureOr<Map<String, String>> load(Map<String, String> options) async {
-    final file = File(await _getJsonFilePath());
+    final file = File(await _getJsonFilePath(options));
     if (!file.existsSync()) {
       return {};
     }
@@ -303,7 +320,7 @@ class DpapiJsonFileMapStorage extends MapStorage {
               nullptr,
               nullptr,
               nullptr,
-              0,
+              options.dpapiFlags,
               plainTextBlob,
             ) ==
             0) {
@@ -384,7 +401,7 @@ class DpapiJsonFileMapStorage extends MapStorage {
     Map<String, String> data,
     Map<String, String> options,
   ) async {
-    final file = File(await _getJsonFilePath());
+    final file = File(await _getJsonFilePath(options));
     final json = jsonEncode(data);
     final plainText = utf8.encode(json);
 
@@ -407,7 +424,7 @@ class DpapiJsonFileMapStorage extends MapStorage {
             nullptr,
             nullptr,
             nullptr,
-            0,
+            options.dpapiFlags,
             encryptedTextBlob,
           ) ==
           0) {
@@ -459,7 +476,7 @@ class DpapiJsonFileMapStorage extends MapStorage {
 
   @override
   FutureOr<void> clear(Map<String, String> options) async {
-    final file = File(await _getJsonFilePath());
+    final file = File(await _getJsonFilePath(options));
     if (file.existsSync()) {
       try {
         await file.delete();

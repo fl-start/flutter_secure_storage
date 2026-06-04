@@ -1137,6 +1137,48 @@ void main() {
       expect(await target.containsKey(key: key2, options: options), isFalse);
     });
   });
+
+  group('accountName namespaces', () {
+    FlutterSecureStoragePlatform createTarget() {
+      TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        (methodCall) async {
+          assert(false, 'MethodChanel is called.');
+          return null;
+        },
+      );
+      return ffi.FlutterSecureStorageWindows();
+    }
+
+    test(
+      'separate accountName values use different files',
+      () => withFfi(() async {
+        final target = createTarget();
+        const key = 'shared_key';
+        const valueA = 'namespace_a';
+        const valueB = 'namespace_b';
+        final optionsA = {
+          'useBackwardCompatibility': 'false',
+          'accountName': 'namespace_a',
+        };
+        final optionsB = {
+          'useBackwardCompatibility': 'false',
+          'accountName': 'namespace_b',
+        };
+
+        await target.write(key: key, value: valueA, options: optionsA);
+        await target.write(key: key, value: valueB, options: optionsB);
+
+        expect(await target.read(key: key, options: optionsA), valueA);
+        expect(await target.read(key: key, options: optionsB), valueB);
+
+        await target.deleteAll(options: optionsA);
+        expect(await target.read(key: key, options: optionsA), isNull);
+        expect(await target.read(key: key, options: optionsB), valueB);
+      }),
+    );
+  });
 }
 
 bool canTest() {

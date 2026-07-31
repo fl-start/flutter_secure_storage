@@ -4,6 +4,7 @@
 - Added desktop private-key API (`DesktopSecureStorage`) with protection / export policies, capability reporting, encrypted PKCS#8 export, and typed errors.
 - Added versioned FSS1 record format and shared Dart parser tests.
 - Windows: DPAPI-wrapped private keys, TPM Platform Crypto Provider probing, Local AppData private-key store.
+- Windows legacy `.secure` path upgraded from AES-128-GCM to **AES-256-GCM** (legacy AES-128 records remain readable / migrate on read).
 - macOS: Secure Enclave / Keychain private-key manager gated with `#if os(macOS)` (iOS unchanged).
 - Linux: per-key Secret Service items with legacy JSON migration; protected-file provider scaffolding; optional TPM/systemd capability slots.
 - Documentation under `docs/architecture/` and updated `DESKTOP_STORAGE.md`.

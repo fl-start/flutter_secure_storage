@@ -14,7 +14,8 @@
 |--------|-----------|--------|
 | DPAPI JSON (`flutter_secure_storage.dat` / namespaced `.dat`) | File magic absent; DPAPI unwrap → JSON map | Per-key FSS1 records under Local AppData (optional migrate-on-read) |
 | Credential Manager + `.secure` (Roaming) | `useBackwardCompatibility` / presence of prefixed creds | Existing path already migrates into DPAPI JSON; then optional FSS1 |
-| AES-128 DEK in CredMan | Size 16 blob | New AES-256 DEK wrapped by DPAPI or TPM |
+| AES-128 DEK in CredMan (`key_*`, 16 bytes) | Size 16 blob | New AES-256 DEK in CredMan (`key256_*`); rewrite `.secure` on successful legacy read |
+| AES-256 DEK in CredMan (`key256_*`) | Size 32 blob | Current write path (AES-256-GCM) |
 
 Default KV behavior remains DPAPI JSON for compatibility unless apps opt into the new record store. New private-key material always uses versioned records + Local AppData.
 

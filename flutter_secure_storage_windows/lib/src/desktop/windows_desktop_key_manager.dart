@@ -681,10 +681,12 @@ Uint8List _randomBytes(int length) {
 }
 
 _AesGcmBlob _aesGcmEncrypt(Uint8List key, Uint8List plaintext) {
+  assert(key.length == 32, 'AES-256-GCM requires a 32-byte key');
   final nonce = _randomBytes(12);
   final cipher = GCMBlockCipher(AESEngine())
     ..init(
       true,
+      // 128 = authentication tag length in bits (16-byte tag), not key size.
       AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)),
     );
   final out = cipher.process(plaintext);
@@ -701,9 +703,11 @@ Uint8List _aesGcmDecrypt(
   required Uint8List tag,
   required Uint8List ciphertext,
 }) {
+  assert(key.length == 32, 'AES-256-GCM requires a 32-byte key');
   final cipher = GCMBlockCipher(AESEngine())
     ..init(
       false,
+      // 128 = authentication tag length in bits (16-byte tag), not key size.
       AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)),
     );
   try {

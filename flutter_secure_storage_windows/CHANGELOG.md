@@ -2,6 +2,7 @@
 
 * Added Windows desktop private-key manager (DPAPI-wrapped FSS1 records, TPM probe, export policy enforcement).
 * Depends on `flutter_secure_storage_platform_interface` ^2.1.0 and `pointycastle` for software key generation.
+* Legacy Credential Manager / `.secure` path now writes **AES-256-GCM** (32-byte DEK under `key256_*`). AES-128-GCM records remain readable and are optionally rewritten on read.
 
 ## 4.1.1
 - Added the `accountName` option: each namespace is stored in its own DPAPI-encrypted file (`flutter_secure_storage_<accountName>.dat`).

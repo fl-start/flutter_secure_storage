@@ -73,7 +73,20 @@ namespace
 
     bool MakePath(const std::wstring& path);
 
-    PBYTE GetEncryptionKey();
+    // Loads or creates the AES-256-GCM DEK used for new writes.
+    // Returns a HeapAlloc'd key; caller must HeapFree. Sets *out_size to 32.
+    PBYTE GetAes256EncryptionKey(DWORD *out_size);
+
+    // Loads the legacy AES-128-GCM DEK if present (CredentialBlobSize == 16).
+    // Returns nullptr when absent. Caller must HeapFree a non-null result.
+    PBYTE GetLegacyAes128EncryptionKey(DWORD *out_size);
+
+    // Decrypts a .secure file buffer with the given AES key (16 or 32 bytes).
+    std::optional<std::string> DecryptSecureFile(
+        PBYTE fileBuffer,
+        std::streampos fileSize,
+        PBYTE encryptionKey,
+        DWORD keySize);
 
     // Stores the given value under the given key.
     void Write(const std::string &key, const std::string &val);
@@ -91,6 +104,12 @@ namespace
 
   const std::string ELEMENT_PREFERENCES_KEY_PREFIX = SECURE_STORAGE_KEY_PREFIX;
   const int ELEMENT_PREFERENCES_KEY_PREFIX_LENGTH = (sizeof SECURE_STORAGE_KEY_PREFIX) - 1;
+
+  // AES-256-GCM is the current content-encryption key size.
+  // Legacy installs may still have a 16-byte AES-128 key under the old name.
+  const DWORD AES_256_KEY_SIZE = 32;
+  const DWORD AES_128_KEY_SIZE = 16;
+  const DWORD AES_GCM_NONCE_SIZE = 12;
 
   // this string is used to filter the credential storage so that only the values written
   // by this plugin shows up.
@@ -311,51 +330,190 @@ namespace
       }
   }
 
-  PBYTE FlutterSecureStorageWindowsPlugin::GetEncryptionKey()
+  PBYTE FlutterSecureStorageWindowsPlugin::GetAes256EncryptionKey(DWORD *out_size)
   {
-      const size_t KEY_SIZE = 16;
-      DWORD credError = 0;
-      PBYTE AesKey;
-      PCREDENTIALW pcred;
-      CA2W target_name(("key_" + ELEMENT_PREFERENCES_KEY_PREFIX).c_str());
+      PBYTE AesKey = NULL;
+      PCREDENTIALW pcred = NULL;
+      // Separate credential name so legacy AES-128 keys remain available for reads.
+      CA2W target_name(("key256_" + ELEMENT_PREFERENCES_KEY_PREFIX).c_str());
 
-      AesKey = (PBYTE)HeapAlloc(GetProcessHeap(), 0, KEY_SIZE);
+      if (out_size == NULL) {
+          return NULL;
+      }
+      *out_size = 0;
+
+      AesKey = (PBYTE)HeapAlloc(GetProcessHeap(), 0, AES_256_KEY_SIZE);
       if (NULL == AesKey) {
           return NULL;
       }
 
       bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
       if (ok) {
-          if (pcred->CredentialBlobSize != KEY_SIZE) {
+          if (pcred->CredentialBlobSize != AES_256_KEY_SIZE) {
               CredFree(pcred);
               CredDeleteW(target_name.m_psz, CRED_TYPE_GENERIC, 0);
               goto NewKey;
           }
-          memcpy(AesKey, pcred->CredentialBlob, KEY_SIZE);
+          memcpy(AesKey, pcred->CredentialBlob, AES_256_KEY_SIZE);
           CredFree(pcred);
+          *out_size = AES_256_KEY_SIZE;
           return AesKey;
       }
-      credError = GetLastError();
-      if (credError != ERROR_NOT_FOUND) {
+      if (GetLastError() != ERROR_NOT_FOUND) {
+          HeapFree(GetProcessHeap(), 0, AesKey);
           return NULL;
       }
   NewKey:
-      if (BCryptGenRandom(NULL, AesKey, KEY_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != ERROR_SUCCESS) {
+      if (BCryptGenRandom(NULL, AesKey, AES_256_KEY_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != ERROR_SUCCESS) {
+          HeapFree(GetProcessHeap(), 0, AesKey);
           return NULL;
       }
       CREDENTIALW cred = { 0 };
       cred.Type = CRED_TYPE_GENERIC;
       cred.TargetName = target_name.m_psz;
-      cred.CredentialBlobSize = KEY_SIZE;
+      cred.CredentialBlobSize = AES_256_KEY_SIZE;
       cred.CredentialBlob = AesKey;
       cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
 
       ok = CredWriteW(&cred, 0);
       if (!ok) {
-          std::cerr << "Failed to write encryption key" << std::endl;
+          std::cerr << "Failed to write AES-256 encryption key" << std::endl;
+          HeapFree(GetProcessHeap(), 0, AesKey);
           return NULL;
       }
+      *out_size = AES_256_KEY_SIZE;
       return AesKey;
+  }
+
+  PBYTE FlutterSecureStorageWindowsPlugin::GetLegacyAes128EncryptionKey(DWORD *out_size)
+  {
+      PBYTE AesKey = NULL;
+      PCREDENTIALW pcred = NULL;
+      CA2W target_name(("key_" + ELEMENT_PREFERENCES_KEY_PREFIX).c_str());
+
+      if (out_size == NULL) {
+          return NULL;
+      }
+      *out_size = 0;
+
+      bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
+      if (!ok) {
+          return NULL;
+      }
+      if (pcred->CredentialBlobSize != AES_128_KEY_SIZE) {
+          CredFree(pcred);
+          return NULL;
+      }
+      AesKey = (PBYTE)HeapAlloc(GetProcessHeap(), 0, AES_128_KEY_SIZE);
+      if (NULL == AesKey) {
+          CredFree(pcred);
+          return NULL;
+      }
+      memcpy(AesKey, pcred->CredentialBlob, AES_128_KEY_SIZE);
+      CredFree(pcred);
+      *out_size = AES_128_KEY_SIZE;
+      return AesKey;
+  }
+
+  std::optional<std::string> FlutterSecureStorageWindowsPlugin::DecryptSecureFile(
+      PBYTE fileBuffer,
+      std::streampos fileSize,
+      PBYTE encryptionKey,
+      DWORD keySize)
+  {
+      NTSTATUS status;
+      BCRYPT_ALG_HANDLE algo = NULL;
+      BCRYPT_KEY_HANDLE keyHandle = NULL;
+      BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+      BCRYPT_AUTH_TAG_LENGTHS_STRUCT authTagLengths{};
+      PBYTE ciphertext = NULL;
+      PBYTE plaintext = NULL;
+      DWORD plaintextSize = 0;
+      DWORD bytesWritten = 0;
+      DWORD ciphertextSize = 0;
+      std::optional<std::string> returnVal = std::nullopt;
+
+      if (encryptionKey == NULL || fileBuffer == NULL) {
+          return std::nullopt;
+      }
+
+      status = BCryptOpenAlgorithmProvider(&algo, BCRYPT_AES_ALGORITHM, NULL, 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+      status = BCryptSetProperty(algo, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+      status = BCryptGetProperty(algo, BCRYPT_AUTH_TAG_LENGTH, (PBYTE)&authTagLengths, sizeof(BCRYPT_AUTH_TAG_LENGTHS_STRUCT), &bytesWritten, 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+
+      BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
+      authInfo.pbNonce = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, AES_GCM_NONCE_SIZE);
+      if (authInfo.pbNonce == NULL) {
+          goto cleanup;
+      }
+      authInfo.cbNonce = AES_GCM_NONCE_SIZE;
+      if (fileSize <= static_cast<long long>(AES_GCM_NONCE_SIZE) + authTagLengths.dwMaxLength) {
+          goto cleanup;
+      }
+      authInfo.pbTag = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, authTagLengths.dwMaxLength);
+      if (authInfo.pbTag == NULL) {
+          goto cleanup;
+      }
+      ciphertextSize = (DWORD)fileSize - AES_GCM_NONCE_SIZE - authTagLengths.dwMaxLength;
+      ciphertext = (PBYTE)HeapAlloc(GetProcessHeap(), 0, ciphertextSize);
+      if (ciphertext == NULL) {
+          goto cleanup;
+      }
+#pragma warning(push)
+#pragma warning(disable:6385)
+      memcpy(authInfo.pbNonce, fileBuffer, AES_GCM_NONCE_SIZE);
+#pragma warning(pop)
+      memcpy(authInfo.pbTag, &fileBuffer[AES_GCM_NONCE_SIZE], authTagLengths.dwMaxLength);
+      memcpy(ciphertext, &fileBuffer[AES_GCM_NONCE_SIZE + authTagLengths.dwMaxLength], ciphertextSize);
+      authInfo.cbTag = authTagLengths.dwMaxLength;
+
+      status = BCryptGenerateSymmetricKey(algo, &keyHandle, NULL, 0, encryptionKey, keySize, 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+      status = BCryptDecrypt(keyHandle, ciphertext, ciphertextSize, (PVOID)&authInfo, NULL, 0, NULL, 0, &bytesWritten, 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+      plaintextSize = bytesWritten;
+      plaintext = (PBYTE)HeapAlloc(GetProcessHeap(), 0, plaintextSize);
+      if (NULL == plaintext) {
+          goto cleanup;
+      }
+      status = BCryptDecrypt(keyHandle, ciphertext, ciphertextSize, (PVOID)&authInfo, NULL, 0, plaintext, plaintextSize, &bytesWritten, 0);
+      if (!BCRYPT_SUCCESS(status)) {
+          goto cleanup;
+      }
+      returnVal = (char*)plaintext;
+  cleanup:
+      if (keyHandle) {
+          BCryptDestroyKey(keyHandle);
+      }
+      if (algo) {
+          BCryptCloseAlgorithmProvider(algo, 0);
+      }
+      if (ciphertext) {
+          HeapFree(GetProcessHeap(), 0, ciphertext);
+      }
+      if (plaintext) {
+          HeapFree(GetProcessHeap(), 0, plaintext);
+      }
+      if (authInfo.pbNonce) {
+          HeapFree(GetProcessHeap(), 0, authInfo.pbNonce);
+      }
+      if (authInfo.pbTag) {
+          HeapFree(GetProcessHeap(), 0, authInfo.pbTag);
+      }
+      return returnVal;
   }
 
   void FlutterSecureStorageWindowsPlugin::HandleMethodCall(
@@ -454,18 +612,16 @@ namespace
 
   void FlutterSecureStorageWindowsPlugin::Write(const std::string &key, const std::string &val)
   {
-      //The recommended size for AES-GCM IV is 12 bytes
-      const DWORD NONCE_SIZE = 12;
-      const DWORD KEY_SIZE = 16;
-
+      // AES-256-GCM with a 12-byte nonce.
+      DWORD keySize = 0;
       NTSTATUS status;
       BCRYPT_ALG_HANDLE algo = NULL;
       BCRYPT_KEY_HANDLE keyHandle = NULL;
       DWORD bytesWritten = 0,
           ciphertextSize = 0;
       PBYTE ciphertext = NULL,
-          iv = (PBYTE)HeapAlloc(GetProcessHeap(), 0, NONCE_SIZE),
-          encryptionKey = GetEncryptionKey();
+          iv = (PBYTE)HeapAlloc(GetProcessHeap(), 0, AES_GCM_NONCE_SIZE),
+          encryptionKey = GetAes256EncryptionKey(&keySize);
       BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
       BCRYPT_AUTH_TAG_LENGTHS_STRUCT authTagLengths{};
       std::basic_ofstream<BYTE> fs;
@@ -476,8 +632,8 @@ namespace
           error = "IV HeapAlloc Failed";
           goto err;
       }
-      if (encryptionKey == NULL) {
-          error = "encryptionKey is NULL";
+      if (encryptionKey == NULL || keySize != AES_256_KEY_SIZE) {
+          error = "AES-256 encryptionKey is NULL";
           goto err;
       }
       status = BCryptOpenAlgorithmProvider(&algo, BCRYPT_AES_ALGORITHM, NULL, 0);
@@ -496,12 +652,12 @@ namespace
           goto err;
       }
       BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
-      authInfo.pbNonce = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, NONCE_SIZE);
+      authInfo.pbNonce = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, AES_GCM_NONCE_SIZE);
       if (authInfo.pbNonce == NULL) {
           error = "pbNonce HeapAlloc Failed";
           goto err;
       }
-      authInfo.cbNonce = NONCE_SIZE;
+      authInfo.cbNonce = AES_GCM_NONCE_SIZE;
       status = BCryptGenRandom(NULL, iv, authInfo.cbNonce, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
       if (!BCRYPT_SUCCESS(status)) {
           error = NtStatusToString("BCryptGenRandom", status);
@@ -519,7 +675,7 @@ namespace
           goto err;
       }
       authInfo.cbTag = authTagLengths.dwMaxLength;
-      status = BCryptGenerateSymmetricKey(algo, &keyHandle, NULL, 0, encryptionKey, KEY_SIZE, 0);
+      status = BCryptGenerateSymmetricKey(algo, &keyHandle, NULL, 0, encryptionKey, keySize, 0);
       if (!BCRYPT_SUCCESS(status)) {
           error = NtStatusToString("BCryptGenerateSymmetricKey", status);
           goto err;
@@ -551,21 +707,35 @@ namespace
           error = "Failed to open output stream";
           goto err;
       }
-      fs.write(iv, NONCE_SIZE);
+      fs.write(iv, AES_GCM_NONCE_SIZE);
       fs.write(authInfo.pbTag, authInfo.cbTag);
       fs.write(ciphertext, ciphertextSize);
       fs.close();
+      if (keyHandle) {
+          BCryptDestroyKey(keyHandle);
+      }
+      if (algo) {
+          BCryptCloseAlgorithmProvider(algo, 0);
+      }
       HeapFree(GetProcessHeap(), 0, iv);
+      SecureZeroMemory(encryptionKey, keySize);
       HeapFree(GetProcessHeap(), 0, encryptionKey);
       HeapFree(GetProcessHeap(), 0, authInfo.pbNonce);
       HeapFree(GetProcessHeap(), 0, authInfo.pbTag);
       HeapFree(GetProcessHeap(), 0, ciphertext);
       return;
   err:
+      if (keyHandle) {
+          BCryptDestroyKey(keyHandle);
+      }
+      if (algo) {
+          BCryptCloseAlgorithmProvider(algo, 0);
+      }
       if (iv) {
           HeapFree(GetProcessHeap(), 0, iv);
       }
       if (encryptionKey) {
+          SecureZeroMemory(encryptionKey, keySize ? keySize : AES_256_KEY_SIZE);
           HeapFree(GetProcessHeap(), 0, encryptionKey);
       }
       if (authInfo.pbNonce) {
@@ -582,31 +752,17 @@ namespace
 
   std::optional<std::string> FlutterSecureStorageWindowsPlugin::Read(const std::string &key)
   {
-      const DWORD NONCE_SIZE = 12;
-      const DWORD KEY_SIZE = 16;
-
-      NTSTATUS status;
-      BCRYPT_ALG_HANDLE algo = NULL;
-      BCRYPT_KEY_HANDLE keyHandle = NULL;
-      BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
-      BCRYPT_AUTH_TAG_LENGTHS_STRUCT authTagLengths{};
-
-      PBYTE encryptionKey = GetEncryptionKey(),
-          ciphertext = NULL,
-          fileBuffer = NULL,
-          plaintext = NULL;
-      DWORD plaintextSize = 0,
-          bytesWritten = 0,
-          ciphertextSize = 0;
+      PBYTE fileBuffer = NULL;
+      DWORD aes256Size = 0;
+      DWORD aes128Size = 0;
+      PBYTE aes256Key = NULL;
+      PBYTE aes128Key = NULL;
       std::wstring appSupportPath;
       std::basic_ifstream<BYTE> fs;
       std::streampos fileSize;
       std::optional<std::string> returnVal = std::nullopt;
+      bool migratedFromAes128 = false;
 
-      if (encryptionKey == NULL) {
-          std::cerr << "encryptionKey is NULL" << std::endl;
-          goto cleanup;
-      }
       GetApplicationSupportPath(appSupportPath);
       if (!PathExists(appSupportPath)) {
           MakePath(appSupportPath);
@@ -638,96 +794,38 @@ namespace
       fs.read(fileBuffer, fileSize);
       fs.close();
 
-      status = BCryptOpenAlgorithmProvider(&algo, BCRYPT_AES_ALGORITHM, NULL, 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptOpenAlgorithmProvider", status) << std::endl;
-          goto cleanup;
+      // Prefer AES-256-GCM; fall back to legacy AES-128-GCM DEK.
+      aes256Key = GetAes256EncryptionKey(&aes256Size);
+      if (aes256Key != NULL && aes256Size == AES_256_KEY_SIZE) {
+          returnVal = DecryptSecureFile(fileBuffer, fileSize, aes256Key, aes256Size);
       }
-      status = BCryptSetProperty(algo, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptOpenAlgorithmProvider", status) << std::endl;
-          goto cleanup;
-      }
-      status = BCryptGetProperty(algo, BCRYPT_AUTH_TAG_LENGTH, (PBYTE)&authTagLengths, sizeof(BCRYPT_AUTH_TAG_LENGTHS_STRUCT), &bytesWritten, 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptGetProperty", status) << std::endl;
-          goto cleanup;
+      if (!returnVal.has_value()) {
+          aes128Key = GetLegacyAes128EncryptionKey(&aes128Size);
+          if (aes128Key != NULL && aes128Size == AES_128_KEY_SIZE) {
+              returnVal = DecryptSecureFile(fileBuffer, fileSize, aes128Key, aes128Size);
+              migratedFromAes128 = returnVal.has_value();
+          }
       }
 
-      BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
-      authInfo.pbNonce = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, NONCE_SIZE);
-      if (authInfo.pbNonce == NULL) {
-          std::cerr << "pbNonce HeapAlloc Failed" << std::endl;
-          goto cleanup;
+      // Optionally rewrite the record under AES-256-GCM after a legacy read.
+      if (migratedFromAes128 && returnVal.has_value()) {
+          try {
+              Write(key, returnVal.value());
+          } catch (...) {
+              // Keep the successfully decrypted value; migration can retry later.
+          }
       }
-      authInfo.cbNonce = NONCE_SIZE;
-      //Check if file is at least long enough for iv and authentication tag
-      if (fileSize <= static_cast<long long>(NONCE_SIZE) + authTagLengths.dwMaxLength) {
-          std::cerr << "File is too small" << std::endl;
-          goto cleanup;
-      }
-      authInfo.pbTag = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, authTagLengths.dwMaxLength);
-      if (authInfo.pbTag == NULL) {
-          std::cerr << "pbTag HeapAlloc Failed" << std::endl;
-          goto cleanup;
-      }
-      ciphertextSize = (DWORD)fileSize - NONCE_SIZE - authTagLengths.dwMaxLength;
-      ciphertext = (PBYTE)HeapAlloc(GetProcessHeap(), 0, ciphertextSize);
-      if (ciphertext == NULL) {
-          std::cerr << "ciphertext HeapAlloc failed" << std::endl;
-          goto cleanup;
-      }
-      //Copy different parts needed for decryption from filebuffer
-#pragma warning(push)
-#pragma warning(disable:6385)
-      memcpy(authInfo.pbNonce, fileBuffer, NONCE_SIZE);
-#pragma warning(pop)
-      memcpy(authInfo.pbTag, &fileBuffer[NONCE_SIZE], authTagLengths.dwMaxLength);
-      memcpy(ciphertext, &fileBuffer[NONCE_SIZE + authTagLengths.dwMaxLength], ciphertextSize);
-      authInfo.cbTag = authTagLengths.dwMaxLength;
-
-      status = BCryptGenerateSymmetricKey(algo, &keyHandle, NULL, 0, encryptionKey, KEY_SIZE, 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptGenerateSymmetricKey", status) << std::endl;
-          goto cleanup;
-      }
-      //First call is to determine size of plaintext
-      status = BCryptDecrypt(keyHandle, ciphertext, ciphertextSize, (PVOID)&authInfo, NULL, 0, NULL, 0, &bytesWritten, 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptDecrypt1", status) << std::endl;
-          goto cleanup;
-      }
-      plaintextSize = bytesWritten;
-      plaintext = (PBYTE)HeapAlloc(GetProcessHeap(), 0, plaintextSize);
-      if (NULL == plaintext) {
-          std::cerr << "plaintext HeapAlloc failed" << std::endl;
-          goto cleanup;
-      }
-      //Actuual decryption
-      status = BCryptDecrypt(keyHandle, ciphertext, ciphertextSize, (PVOID)&authInfo, NULL, 0, plaintext, plaintextSize, &bytesWritten, 0);
-      if (!BCRYPT_SUCCESS(status)) {
-          std::cerr << NtStatusToString("BCryptDecrypt2", status) << std::endl;
-          goto cleanup;
-      }
-      returnVal = (char*)plaintext;
   cleanup:
-      if (encryptionKey) {
-          HeapFree(GetProcessHeap(), 0, encryptionKey);
+      if (aes256Key) {
+          SecureZeroMemory(aes256Key, aes256Size ? aes256Size : AES_256_KEY_SIZE);
+          HeapFree(GetProcessHeap(), 0, aes256Key);
       }
-      if (ciphertext) {
-          HeapFree(GetProcessHeap(), 0, ciphertext);
-      }
-      if (plaintext) {
-          HeapFree(GetProcessHeap(), 0, plaintext);
+      if (aes128Key) {
+          SecureZeroMemory(aes128Key, aes128Size ? aes128Size : AES_128_KEY_SIZE);
+          HeapFree(GetProcessHeap(), 0, aes128Key);
       }
       if (fileBuffer) {
           HeapFree(GetProcessHeap(), 0, fileBuffer);
-      }
-      if (authInfo.pbNonce) {
-          HeapFree(GetProcessHeap(), 0, authInfo.pbNonce);
-      }
-      if (authInfo.pbTag) {
-          HeapFree(GetProcessHeap(), 0, authInfo.pbTag);
       }
       return returnVal;
   }

@@ -30,6 +30,16 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         registrar.addMethodCallDelegate(instance, channel: channel)
         registrar.addApplicationDelegate(instance)
         eventChannel.setStreamHandler(instance)
+
+        #if os(macOS)
+        let desktopChannel = FlutterMethodChannel(
+            name: "plugins.it_nomads.com/flutter_secure_storage/desktop_keys",
+            binaryMessenger: messenger
+        )
+        desktopChannel.setMethodCallHandler { call, result in
+            instance.handleDesktopKeys(call, result: result)
+        }
+        #endif
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -70,6 +80,79 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             }
         }
     }
+
+    #if os(macOS)
+    fileprivate func handleDesktopKeys(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        serialExecutionQueue.async {
+            do {
+                let args = call.arguments as? [String: Any] ?? [:]
+                switch call.method {
+                case "getCapabilities":
+                    let protection = args["protection"] as? String ?? "platformDefault"
+                    DispatchQueue.main.async {
+                        result(DesktopPrivateKeyManager.shared.getCapabilities(protection: protection))
+                    }
+                case "createPrivateKey":
+                    let value = try DesktopPrivateKeyManager.shared.createPrivateKey(args: args)
+                    DispatchQueue.main.async { result(value) }
+                case "getPrivateKeyHandle":
+                    let keyId = args["keyId"] as? String ?? ""
+                    DispatchQueue.main.async {
+                        result(DesktopPrivateKeyManager.shared.getPrivateKeyHandle(keyId: keyId))
+                    }
+                case "listPrivateKeys":
+                    DispatchQueue.main.async {
+                        result(DesktopPrivateKeyManager.shared.listPrivateKeys())
+                    }
+                case "deletePrivateKey":
+                    let keyId = args["keyId"] as? String ?? ""
+                    try DesktopPrivateKeyManager.shared.deletePrivateKey(keyId: keyId)
+                    DispatchQueue.main.async { result(nil) }
+                case "exportPrivateKey":
+                    let keyId = args["keyId"] as? String ?? ""
+                    let passphrase = args["passphrase"] as? String ?? ""
+                    let encoding = args["encoding"] as? String ?? "pemPkcs8"
+                    let value = try DesktopPrivateKeyManager.shared.exportPrivateKey(
+                        keyId: keyId,
+                        passphrase: passphrase,
+                        encoding: encoding
+                    )
+                    DispatchQueue.main.async { result(value) }
+                case "sign":
+                    let keyId = args["keyId"] as? String ?? ""
+                    let data = (args["data"] as? FlutterStandardTypedData)?.data ?? Data()
+                    let signature = try DesktopPrivateKeyManager.shared.sign(keyId: keyId, data: data)
+                    DispatchQueue.main.async {
+                        result(FlutterStandardTypedData(bytes: signature))
+                    }
+                case "getPublicKey":
+                    let keyId = args["keyId"] as? String ?? ""
+                    let pub = try DesktopPrivateKeyManager.shared.getPublicKey(keyId: keyId)
+                    DispatchQueue.main.async {
+                        result(FlutterStandardTypedData(bytes: pub))
+                    }
+                case "createCertificateSigningRequest":
+                    let keyId = args["keyId"] as? String ?? ""
+                    let subject = args["subjectDistinguishedName"] as? String ?? ""
+                    let csr = try DesktopPrivateKeyManager.shared.createCSR(keyId: keyId, subject: subject)
+                    DispatchQueue.main.async {
+                        result(FlutterStandardTypedData(bytes: csr))
+                    }
+                default:
+                    DispatchQueue.main.async { result(FlutterMethodNotImplemented) }
+                }
+            } catch {
+                let nsError = error as NSError
+                let code = nsError.userInfo["code"] as? String ?? "unknown"
+                DispatchQueue.main.async {
+                    result(FlutterError(code: code, message: nsError.localizedDescription, details: [
+                        "provider": "macos"
+                    ]))
+                }
+            }
+        }
+    }
+    #endif
 
     public func onListen(withArguments arguments: Any?,
                          eventSink: @escaping FlutterEventSink) -> FlutterError? {

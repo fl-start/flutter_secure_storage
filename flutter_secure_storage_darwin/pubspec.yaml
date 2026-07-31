@@ -1,6 +1,6 @@
 name: flutter_secure_storage_darwin
 description: "Apple (ios and macos) implementation of flutter_secure_storage"
-version: 0.2.1
+version: 0.3.0
 repository: https://github.com/fl-start/flutter_secure_storage/tree/develop/flutter_secure_storage_darwin
 
 environment:

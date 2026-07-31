@@ -1,3 +1,7 @@
+## 2.1.0
+
+* Added desktop private-key API types, capability model, typed errors, and FSS1 record codec.
+
 ## 2.0.2
 - Maintenance: updated repository metadata to the fl-start fork; version alignment with platform packages.
 

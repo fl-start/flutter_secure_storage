@@ -7,10 +7,13 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart'
     show debugPrint, kDebugMode, visibleForTesting;
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage_platform_interface/desktop_secure_storage.dart';
 import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage_platform_interface.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:win32/win32.dart';
+
+import 'desktop/windows_desktop_key_manager.dart';
 
 /// An extension on `Map<String, String>` to add support for specific
 /// configuration options related to backward compatibility.
@@ -97,6 +100,7 @@ class FlutterSecureStorageWindows extends FlutterSecureStoragePlatform {
   /// Registers this plugin.
   static void registerWith() {
     FlutterSecureStoragePlatform.instance = FlutterSecureStorageWindows();
+    DesktopPrivateKeyManager.instance = WindowsDesktopKeyManager();
   }
 
   @override

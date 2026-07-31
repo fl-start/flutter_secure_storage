@@ -40,7 +40,8 @@ static SecretStorage &keyringForAccount(const std::string &accountName)
   const std::string accountAttr =
       std::string(APPLICATION_ID) + "." + accountName + ".secureStorage";
 
-  auto storage = std::make_unique<SecretStorage>(label.c_str());
+  auto storage = std::make_unique<SecretStorage>(
+      label.c_str(), APPLICATION_ID, accountName.c_str());
   storage->addAttribute("account", accountAttr.c_str());
   auto &ref = *storage;
   g_keyrings.emplace(accountName, std::move(storage));
@@ -101,19 +102,19 @@ static FlValue *read(SecretStorage &keyring, const gchar *key)
 static FlValue *readAll(SecretStorage &keyring)
 {
   FlValue *result = fl_value_new_map();
-  nlohmann::json data = keyring.readFromKeyring();
-  for (auto each : data.items())
+  auto data = keyring.readAllItems();
+  for (const auto &each : data)
   {
-    fl_value_set_string_take(result, each.key().c_str(),
-                             fl_value_new_string(std::string(each.value()).c_str()));
+    fl_value_set_string_take(result, each.first.c_str(),
+                             fl_value_new_string(each.second.c_str()));
   }
   return result;
 }
 
 static FlValue *containsKey(SecretStorage &keyring, const gchar *key)
 {
-  nlohmann::json data = keyring.readFromKeyring();
-  return fl_value_new_bool(data.contains(key));
+  auto value = keyring.getItem(key);
+  return fl_value_new_bool(!value.empty());
 }
 
 // Called when a method call is received from Flutter.
@@ -250,6 +251,68 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   flutter_secure_storage_linux_plugin_handle_method_call(plugin, method_call);
 }
 
+static void desktop_keys_method_call_cb(FlMethodChannel *channel,
+                                        FlMethodCall *method_call,
+                                        gpointer user_data)
+{
+  const gchar *method = fl_method_call_get_name(method_call);
+  g_autoptr(FlMethodResponse) response = nullptr;
+
+  if (strcmp(method, "getCapabilities") == 0)
+  {
+    g_autoptr(FlValue) map = fl_value_new_map();
+    fl_value_set_string_take(map, "platform", fl_value_new_string("linux"));
+
+    FlValue *providers = fl_value_new_list();
+    fl_value_append_take(providers, fl_value_new_string("secret_service"));
+    fl_value_append_take(providers, fl_value_new_string("protected_file"));
+    fl_value_append_take(providers, fl_value_new_string("tpm2_optional"));
+    fl_value_append_take(providers, fl_value_new_string("systemd_creds_optional"));
+    fl_value_set_string_take(map, "availableProviders", providers);
+
+    fl_value_set_string_take(map, "selectedProvider",
+                             fl_value_new_string("secret_service"));
+    fl_value_set_string_take(map, "hardwareAvailable", fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "storageProtectionHardwareBacked",
+                             fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "privateKeyHardwareBacked",
+                             fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "supportsNonExportableKeys",
+                             fl_value_new_bool(TRUE));
+    fl_value_set_string_take(map, "supportsExportableKeys",
+                             fl_value_new_bool(TRUE));
+    fl_value_set_string_take(map, "supportsUserPresence",
+                             fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "supportsMachineScope",
+                             fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "supportsCsrGeneration",
+                             fl_value_new_bool(TRUE));
+
+    FlValue *algs = fl_value_new_list();
+    fl_value_append_take(algs, fl_value_new_string("rsa2048"));
+    fl_value_append_take(algs, fl_value_new_string("rsa3072"));
+    fl_value_append_take(algs, fl_value_new_string("ecP256"));
+    fl_value_append_take(algs, fl_value_new_string("ed25519"));
+    fl_value_set_string_take(map, "supportedAlgorithms", algs);
+
+    FlValue *formats = fl_value_new_list();
+    fl_value_append_take(formats, fl_value_new_string("pemPkcs8"));
+    fl_value_append_take(formats, fl_value_new_string("derPkcs8"));
+    fl_value_set_string_take(map, "supportedExportFormats", formats);
+
+    fl_value_set_string_take(map, "sameUserCompromiseResistant",
+                             fl_value_new_bool(FALSE));
+    fl_value_set_string_take(map, "rootCompromiseResistant",
+                             fl_value_new_bool(FALSE));
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(map));
+  }
+  else
+  {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  fl_method_call_respond(method_call, response, nullptr);
+}
+
 void flutter_secure_storage_linux_plugin_register_with_registrar(
     FlPluginRegistrar *registrar)
 {
@@ -262,5 +325,15 @@ void flutter_secure_storage_linux_plugin_register_with_registrar(
       "plugins.it_nomads.com/flutter_secure_storage", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(
       channel, method_call_cb, g_object_ref(plugin), g_object_unref);
+
+  g_autoptr(FlStandardMethodCodec) desktop_codec = fl_standard_method_codec_new();
+  g_autoptr(FlMethodChannel) desktop_channel = fl_method_channel_new(
+      fl_plugin_registrar_get_messenger(registrar),
+      "plugins.it_nomads.com/flutter_secure_storage/desktop_keys",
+      FL_METHOD_CODEC(desktop_codec));
+  fl_method_channel_set_method_call_handler(
+      desktop_channel, desktop_keys_method_call_cb, g_object_ref(plugin),
+      g_object_unref);
+
   g_object_unref(plugin);
 }

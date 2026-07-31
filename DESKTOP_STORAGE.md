@@ -1,41 +1,106 @@
 # Desktop secure storage (fl-start fork)
 
-This document describes how `flutter_secure_storage` behaves on **Windows**, **macOS**, and **Linux**, and how to configure it safely.
+This document describes how `flutter_secure_storage` behaves on **Windows**, **macOS**, and **Linux**, including the v11 desktop private-key API.
+
+See also:
+
+- [Architecture](docs/architecture/01-architecture.md)
+- [Threat model](docs/architecture/02-threat-model.md)
+- [API design](docs/architecture/03-api-design.md)
+- [Migration plan](docs/architecture/04-migration-plan.md)
+- [Record format](docs/architecture/05-record-format.md)
+- [Compatibility matrix](docs/architecture/06-compatibility-matrix.md)
 
 ## Summary
 
-| Platform | Backend | Namespace option | Notes |
-|----------|---------|------------------|-------|
-| macOS | Keychain (`kSecClassGenericPassword`) | `MacOsOptions.accountName` → `kSecAttrService` | Strongest desktop model; see [docs/macos_entitlements.md](docs/macos_entitlements.md) for sandboxed apps |
-| Windows | DPAPI + JSON file | `WindowsOptions.accountName` → separate `.dat` file | User-scoped DPAPI by default |
-| Linux | libsecret (GNOME Keyring / KWallet) | `LinuxOptions.accountName` → separate keyring entry | Requires DBus + keyring; one JSON blob per namespace |
+| Platform | KV backend | Namespace option | Private keys |
+|----------|------------|------------------|--------------|
+| macOS | Keychain (`kSecClassGenericPassword`) | `MacOsOptions.accountName` → `kSecAttrService` | SE / Keychain (`#if os(macOS)` only) |
+| Windows | DPAPI + JSON file (legacy CredMan + `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
+| Linux | libsecret per-key items (migrated from JSON blob) | `LinuxOptions.accountName` | Provider matrix + capabilities |
 
-## Windows
+## Key-value storage
 
-- All keys for a namespace are stored in one JSON object, encrypted with **DPAPI** (`CryptProtectData` / `CryptUnprotectData`), written under the app support directory as `flutter_secure_storage_<accountName>.dat`.
-- **`WindowsOptions.useLocalMachine`**: sets `CRYPTPROTECT_LOCAL_MACHINE`. Use only when you intentionally need **machine-scoped** secrets (e.g. Windows services). Any process with suitable access on that machine may decrypt; this is **not** the default and is weaker for per-user app secrets.
-- **`WindowsOptions.useBackwardCompatibility`**: migrates legacy Credential Manager entries. Keep `false` for new apps (required for some key characters).
-- **Threat model**: DPAPI binds to the **logged-in Windows user** by default. Malware running as the same user can often read secrets after login. Backups of `%AppData%` copy ciphertext, not plaintext.
+### Windows
 
-## macOS
+- Default: JSON object encrypted with **DPAPI**, under app support as `flutter_secure_storage_<accountName>.dat`.
+- `useLocalMachine`: `CRYPTPROTECT_LOCAL_MACHINE` (not default).
+- `useBackwardCompatibility`: migrates legacy Credential Manager / `.secure` (Roaming) into DPAPI JSON.
+- New private-key records prefer **Local AppData**.
 
-- Each Flutter key is a separate Keychain item; `accountName` maps to **`kSecAttrService`**.
-- **`usesDataProtectionKeychain`** (default `true` on macOS 10.15+) uses the data-protection keychain.
-- Optional Secure Enclave path for high-assurance items (`useSecureEnclave`).
-- **Threat model**: OS Keychain + login session; sandboxed apps need correct entitlements.
+### macOS
 
-## Linux
+- Each Flutter key is a separate Keychain item; optional Secure Enclave envelope for KV (`useSecureEnclave`).
+- **iOS behavior is unchanged.** New private-key code is macOS-gated.
 
-- Requires **libsecret** and a running secret service (GNOME Keyring, KWallet, etc.).
-- Each `accountName` gets its own libsecret password whose value is a **JSON map of all keys** (read/modify/write rewrites the blob).
-- First access may trigger a **keyring unlock** prompt (warmup workaround for libsecret cold-start).
-- **`LinuxOptions.accountName`** isolates logical stores (e.g. `secmail.crypto` vs default `flutter_secure_storage_service`).
-- **Threat model**: Protection depends on session lock and keyring unlock; processes that can unlock the keyring can read the blob.
+### Linux
 
-## Performance
+- Secret Service via libsecret.
+- After upgrade, values migrate from a single JSON secret to **one secret per logical key**.
+- Legacy JSON item is deleted only after every migrated item is verified.
+- Fallback: protected encrypted-file backend under `$XDG_DATA_HOME/<app>/secure-storage/` (mode `0700`/`0600`).
+- TPM2 / systemd-creds are optional runtime providers (not required to build).
 
-On **Windows** and **Linux**, `readAll()` decrypts and parses the **entire** namespace. Prefer `read` / `containsKey` for single keys. Consumers such as `secmail_crypto_flutter` maintain a **key index** on those platforms to implement `readAllKeys()` without calling `readAll()`.
+## Desktop private-key API
+
+```dart
+import 'package:flutter_secure_storage/desktop/desktop_secure_storage.dart';
+
+final storage = DesktopSecureStorage.privateKeys;
+
+// Non-exportable admin key
+final handle = await storage.createPrivateKey(
+  DesktopPrivateKeyOptions(
+    keyId: 'idr.admin.identity',
+    algorithm: DesktopKeyAlgorithm.ecP256,
+    protection: DesktopSecureStorageProtection.hardwareBackedRequired,
+    exportPolicy: PrivateKeyExportPolicy.nonExportable,
+    requireUserPresence: true,
+  ),
+);
+
+// Exportable device key
+final device = await storage.createPrivateKey(
+  DesktopPrivateKeyOptions(
+    keyId: 'idr.device.identity',
+    algorithm: DesktopKeyAlgorithm.ecP256,
+    protection: DesktopSecureStorageProtection.hardwareBackedPreferred,
+    exportPolicy: PrivateKeyExportPolicy.exportableEncrypted,
+  ),
+);
+
+final exported = await storage.exportPrivateKey(
+  'idr.device.identity',
+  PrivateKeyExportOptions(
+    encoding: PrivateKeyEncoding.pemPkcs8,
+    passphrase: exportPassphrase,
+    kdf: PrivateKeyKdf.pbkdf2Sha256,
+  ),
+);
+// exported.bytes remain encrypted PKCS#8
+```
+
+### Export vs hardware
+
+| Situation | `privateKeyHardwareBacked` | `storageProtectionHardwareBacked` | exportable |
+|-----------|----------------------------|-----------------------------------|------------|
+| SE/TPM-resident signing key | true | true | false |
+| Software key, SE/TPM wrap | false | true | true |
+| DPAPI / Keychain / Secret Service only | false | false | policy-dependent |
+
+### Passphrases
+
+Prefer `passphraseBytes` (`Uint8List`). Dart `String` passphrases cannot be reliably wiped from memory.
+
+## Threat model (short)
+
+- Same-user malware can often read software-protected secrets after login.
+- Hardware-backed non-exportable keys resist extraction; export is rejected.
+- No embedded global recovery / escrow key.
+- Filenames are never trusted metadata (FSS1 embeds `key_id_hash`).
 
 ## fl-start releases
 
-Tag releases as `v<version>-fl.<n>` (e.g. `v10.0.1-fl.1`) and pin dependents to that tag. See [SYNC.md](SYNC.md) for upstream merge policy.
+- Package version **11.0.0**
+- Immutable production tag: `desktop-secure-storage-v11.0.0` on `main`
+- Optional pin: `v11.0.0-fl.1` (see `SYNC.md`)

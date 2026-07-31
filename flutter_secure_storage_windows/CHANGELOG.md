@@ -1,3 +1,8 @@
+## 5.0.0
+
+* Added Windows desktop private-key manager (DPAPI-wrapped FSS1 records, TPM probe, export policy enforcement).
+* Depends on `flutter_secure_storage_platform_interface` ^2.1.0 and `pointycastle` for software key generation.
+
 ## 4.1.1
 - Added the `accountName` option: each namespace is stored in its own DPAPI-encrypted file (`flutter_secure_storage_<accountName>.dat`).
 - Added the `useLocalMachine` option to encrypt with `CRYPTPROTECT_LOCAL_MACHINE` (machine-scoped DPAPI).

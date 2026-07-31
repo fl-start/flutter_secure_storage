@@ -1,7 +1,7 @@
 name: flutter_secure_storage_platform_interface
 description: A common platform interface for the flutter_secure_storage plugin.
 repository: https://github.com/fl-start/flutter_secure_storage/tree/develop/flutter_secure_storage_platform_interface
-version: 2.0.2
+version: 2.1.0
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

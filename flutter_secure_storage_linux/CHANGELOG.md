@@ -1,3 +1,9 @@
+## 4.0.0
+
+* Migrated Secret Service storage to per-key items with verified legacy JSON migration.
+* Added protected-file provider scaffolding and desktop capability channel.
+* TPM2 / systemd-creds remain optional runtime providers (not required to build).
+
 ## 3.0.1
 - Added support for the `accountName` option to isolate secrets into separate libsecret keyring entries (namespaces).
 - Fixed a use-after-free: libsecret error messages are now copied before being thrown (previously the thrown pointer was freed during stack unwinding).

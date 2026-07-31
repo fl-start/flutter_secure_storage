@@ -18,9 +18,11 @@ dependencies:
   flutter_secure_storage:
     git:
       url: https://github.com/fl-start/flutter_secure_storage.git
-      ref: v10.0.1-fl.1
+      ref: desktop-secure-storage-v11.0.0
       path: flutter_secure_storage
 ```
+
+Or the fl-start pin tag `v11.0.0-fl.1` when published.
 
 **Path (local workspace)**:
 

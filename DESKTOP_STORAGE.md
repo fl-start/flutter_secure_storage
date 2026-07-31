@@ -16,7 +16,7 @@ See also:
 | Platform | KV backend | Namespace option | Private keys |
 |----------|------------|------------------|--------------|
 | macOS | Keychain (`kSecClassGenericPassword`) | `MacOsOptions.accountName` → `kSecAttrService` | SE / Keychain (`#if os(macOS)` only) |
-| Windows | DPAPI + JSON file (legacy CredMan + `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
+| Windows | DPAPI + JSON file (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
 | Linux | libsecret per-key items (migrated from JSON blob) | `LinuxOptions.accountName` | Provider matrix + capabilities |
 
 ## Key-value storage

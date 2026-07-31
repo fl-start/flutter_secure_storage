@@ -30,9 +30,10 @@ fl-start release tag convention: `v10.0.1-fl.1` (see `SYNC.md`).
 ### Legacy path (C++ plugin / Credential Manager)
 
 - Implementation: `flutter_secure_storage_windows/windows/flutter_secure_storage_windows_plugin.cpp`
-- AES key (16 bytes) in Windows Credential Manager (`CredReadW` / `CredWriteW`)
-- Values: AES-GCM (BCrypt) files under **Roaming** AppData (`FOLDERID_RoamingAppData`)
-- File pattern: prefixed keys + `.secure` ciphertext (nonce + ciphertext + tag)
+- AES-256 key (32 bytes) in Windows Credential Manager as `key256_*` (`CredReadW` / `CredWriteW`)
+- Legacy AES-128 key (16 bytes) under `key_*` remains readable for migration
+- Values: AES-256-GCM (BCrypt) files under **Roaming** AppData (`FOLDERID_RoamingAppData`)
+- File pattern: prefixed keys + `.secure` ciphertext (nonce + tag + ciphertext)
 - Migration: `useBackwardCompatibility: true` copies legacy entries into the DPAPI JSON file (default namespace only)
 
 ## macOS / iOS (Darwin shared sources)

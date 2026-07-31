@@ -73,7 +73,7 @@ See CI / local test run summary in the PR. Expected:
 ## Known limitations
 
 - Windows non-exportable “hardware” path currently probes TPM and stores software material with accurate export refusal; full NCrypt persisted non-exportable keys are the next hardening step.
-- Linux private-key create/sign/export beyond capability channel is partially staged.
+- Linux private-key create/sign/export is implemented (software keys + SS/file DEK wrap); TPM-resident private keys remain future work (`hardwareBackedRequired` fails closed).
 - CSR payloads use an internal `FSS-CSR1` bundle pending full PKCS#10 ASN.1.
 - Dart `String` export passphrases cannot be wiped.
 
@@ -97,6 +97,6 @@ See CI / local test run summary in the PR. Expected:
 ## Known follow-ups
 
 - Full NCrypt-persisted non-exportable TPM private keys on Windows
-- Complete Linux private-key create/sign/export beyond capability channel
+- Linux TPM2-resident private-key create/sign (beyond probe + fail-closed)
 - Standards-complete PKCS#10 CSR encoding
-- Merge PR #1 into `develop` (no auto-merge); `main` already points at the release commit
+- Sync `develop` with `main` release history

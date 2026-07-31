@@ -1,3 +1,11 @@
+## 11.0.2
+
+### Linux private-key artifacts (fl-start)
+- Linux desktop private-key manager (`LinuxDesktopKeyManager`) with FSS1 / FSS-EPK1 / FSS-CSR1 (Windows parity).
+- Soft-loads `libsecret` via `dlopen`; protected-file fallback for headless / minimal distros.
+- Honest capability reporting with TPM2 ESAPI probe; `hardwareBackedRequired` fails closed.
+- Depends on `flutter_secure_storage_linux` ^4.1.0.
+
 ## 11.0.0
 
 ### Desktop hardware-backed storage (fl-start)

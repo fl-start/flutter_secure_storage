@@ -11,6 +11,10 @@
 #include <stdexcept>
 #include <sstream>
 
+#ifndef APPLICATION_ID
+#define APPLICATION_ID "flutter_secure_storage"
+#endif
+
 namespace fss {
 
 /// Encrypted-file backend for headless / non-GNOME environments.

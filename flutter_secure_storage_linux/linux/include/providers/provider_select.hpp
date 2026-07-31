@@ -2,32 +2,39 @@
 
 #include "linux_storage_provider.hpp"
 #include "protected_file_provider.hpp"
+#include "../secret_service_loader.hpp"
+#include "../tpm_probe.hpp"
 
 namespace fss {
 
 /// Runtime provider selection. TPM / systemd are optional and probed at runtime.
-/// This header keeps the base plugin buildable without TPM development headers.
 inline std::unique_ptr<LinuxStorageProvider>
 selectProvider(ProtectionPolicy policy, bool headless,
                bool allow_filesystem_only_master_key) {
-  // Secret Service is preferred for interactive desktop platformDefault.
-  // Protected file is the portable fallback for headless / missing keyring.
   if (policy == ProtectionPolicy::HardwareBackedRequired) {
-    // TPM provider is dynamically loaded in a follow-on translation unit when
-    // libtss2 is present. Without it, fail closed.
+    // TPM-resident KV not implemented; fail closed.
+    if (!fss_probe_tpm2_available()) {
+      return nullptr;
+    }
     return nullptr;
   }
 
-  if (headless || policy == ProtectionPolicy::SoftwareProtected) {
+  if (headless || policy == ProtectionPolicy::SoftwareProtected ||
+      !SecretServiceLoader::instance().available() ||
+      !SecretServiceLoader::sessionBusPresent()) {
     return std::make_unique<ProtectedFileProvider>(
         allow_filesystem_only_master_key);
   }
 
-  // Default / preferred: Secret Service remains the primary path implemented
-  // via SecretStorage in the plugin. Protected file is available as fallback
-  // when libsecret operations fail at runtime.
+  // Secret Service preferred for interactive desktop; callers may still fall
+  // back to ProtectedFileProvider if libsecret operations fail.
   return std::make_unique<ProtectedFileProvider>(
       allow_filesystem_only_master_key);
+}
+
+inline bool prefer_secret_service_kv(bool headless) {
+  return !headless && SecretServiceLoader::instance().available() &&
+         SecretServiceLoader::sessionBusPresent();
 }
 
 } // namespace fss

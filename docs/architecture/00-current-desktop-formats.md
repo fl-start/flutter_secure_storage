@@ -64,20 +64,18 @@ Any change to shared Swift without `#if os(macOS)` guards can alter iOS behavior
 
 ## Linux
 
-- Implementation: `flutter_secure_storage_linux/linux/flutter_secure_storage_linux_plugin.cc` + `include/Secret.hpp`
-- Backend: libsecret (`secret_password_storev_sync` / `lookupv_sync`)
-- Format: **one JSON object** for all keys in a single secret item
+- Implementation: `flutter_secure_storage_linux/linux/flutter_secure_storage_linux_plugin.cc` + `include/Secret.hpp` + soft `secret_service_loader` + `ProtectedFileProvider`
+- Backend: libsecret via **dlopen** (per-key items + legacy JSON migration); protected-file fallback under `$XDG_DATA_HOME`
 - Schema attribute: `account` = `<APPLICATION_ID>.<accountName>.secureStorage`
-- Label: `<APPLICATION_ID>/FlutterSecureStorage/<accountName>`
 - Namespace: `LinuxOptions.accountName`
-- Cold-start workaround: dummy “FlutterSecureStorage Control” store to unlock keyring
-- No TPM / systemd / encrypted-file backends today
+- Private keys: Dart `LinuxDesktopKeyManager` (FSS1 / FSS-EPK1 / FSS-CSR1); DEK wrap via Secret Service or protected-file
+- TPM2 ESAPI: runtime probe only (`libtss2-esys`); not required to build
 
 ## Private-key management
 
-None. Existing API is key-value only (`write` / `read` / `readAll` / `delete` / `deleteAll` / `containsKey`).
+Desktop API on Windows / macOS / Linux via `DesktopPrivateKeyManager` (see `DESKTOP_STORAGE.md`).
 
 ## CI (baseline)
 
 - `.github/workflows/ci.yml`: analysis, format, unit tests, Android/iOS/Web integration; triggers on `master` and `develop`
-- `.github/workflows/desktop-smoke.yml`: Windows `flutter test`, Linux/macOS example builds
+- `.github/workflows/desktop-smoke.yml`: Windows/Linux unit tests, Linux builds with and without libsecret-dev, macOS example build

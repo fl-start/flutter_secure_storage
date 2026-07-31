@@ -1,17 +1,20 @@
-#include <libsecret/secret.h>
+#pragma once
+
+#include <glib.h>
 
 class FHashTable {
   GHashTable *m_hashTable;
-  public:
 
-  FHashTable() { m_hashTable = g_hash_table_new_full(g_str_hash, nullptr, g_free, g_free); }
-
-  GHashTable* getGHashTable(){
-    return m_hashTable;
+public:
+  FHashTable() {
+    m_hashTable = g_hash_table_new_full(g_str_hash, nullptr, g_free, g_free);
   }
 
+  GHashTable *getGHashTable() { return m_hashTable; }
+
   bool insert(const char *key, const char *value) {
-    return g_hash_table_insert(m_hashTable, (void *)g_strdup(key), (void *)g_strdup(value));
+    return g_hash_table_insert(m_hashTable, (void *)g_strdup(key),
+                               (void *)g_strdup(value));
   }
 
   const char *get(const char *key) {
@@ -28,7 +31,5 @@ class FHashTable {
 
   void removeAll() { g_hash_table_remove_all(m_hashTable); }
 
-  ~FHashTable() {
-    g_hash_table_destroy(m_hashTable);
-  }
+  ~FHashTable() { g_hash_table_destroy(m_hashTable); }
 };

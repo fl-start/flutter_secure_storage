@@ -17,5 +17,11 @@
 ## Tagging
 
 - Production branch: `main`
-- Immutable tag: `desktop-secure-storage-v11.0.0`
-- fl-start pin (optional): `v11.0.0-fl.1`
+- Immutable tags: `desktop-secure-storage-v11.0.0`, `v11.0.1`, `v11.0.2`
+- fl-start pins: `v11.0.0-fl.1`, `v11.0.1-fl.1`, `v11.0.2-fl.1`
+
+## 11.0.2 (Linux private keys)
+
+- Full Linux `DesktopPrivateKeyManager` (create/sign/export/CSR/delete)
+- Soft-loaded libsecret + protected-file fallback for broad distro/headless support
+- TPM2 probe only; `hardwareBackedRequired` fails closed

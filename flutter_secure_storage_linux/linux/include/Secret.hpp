@@ -2,58 +2,58 @@
 
 #include "FHashTable.hpp"
 #include "json.hpp"
+#include "secret_service_loader.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <libsecret/secret.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#define secret_autofree _GLIB_CLEANUP(secret_cleanup_free)
-static inline void secret_cleanup_free(gchar **p) { secret_password_free(*p); }
+#ifndef APPLICATION_ID
+#define APPLICATION_ID "flutter_secure_storage"
+#endif
 
 /// Secret Service backend with per-key items and legacy JSON migration.
 ///
-/// Legacy format: one password item whose value is a JSON object of all keys.
-/// New format: one password item per logical key with schema attributes:
-/// application-id, account-name, storage-key-hash, record-version.
+/// Uses soft-loaded libsecret (see SecretServiceLoader). Callers must check
+/// SecretServiceLoader::instance().available() before use.
 class SecretStorage {
   FHashTable m_attributes;
   std::string label;
   std::string index_label;
   std::string application_id;
   std::string account_name;
-  SecretSchema the_schema;
-  SecretSchema item_schema;
-  SecretSchema index_schema;
+  SecretServiceLoader::Schema the_schema{};
+  SecretServiceLoader::Schema item_schema{};
+  SecretServiceLoader::Schema index_schema{};
   bool migrated_ = false;
 
   void rebuildSchema() {
     index_label = label + "/index";
     the_schema = {label.c_str(),
-                  SECRET_SCHEMA_NONE,
+                  SecretServiceLoader::SCHEMA_NONE,
                   {
-                      {"account", SECRET_SCHEMA_ATTRIBUTE_STRING},
+                      {"account", SecretServiceLoader::ATTR_STRING},
                   }};
     item_schema = {"flutter_secure_storage_item",
-                   SECRET_SCHEMA_NONE,
+                   SecretServiceLoader::SCHEMA_NONE,
                    {
-                       {"application-id", SECRET_SCHEMA_ATTRIBUTE_STRING},
-                       {"account-name", SECRET_SCHEMA_ATTRIBUTE_STRING},
-                       {"storage-key-hash", SECRET_SCHEMA_ATTRIBUTE_STRING},
-                       {"record-version", SECRET_SCHEMA_ATTRIBUTE_STRING},
+                       {"application-id", SecretServiceLoader::ATTR_STRING},
+                       {"account-name", SecretServiceLoader::ATTR_STRING},
+                       {"storage-key-hash", SecretServiceLoader::ATTR_STRING},
+                       {"record-version", SecretServiceLoader::ATTR_STRING},
                    }};
     index_schema = {index_label.c_str(),
-                    SECRET_SCHEMA_NONE,
+                    SecretServiceLoader::SCHEMA_NONE,
                     {
-                        {"account", SECRET_SCHEMA_ATTRIBUTE_STRING},
+                        {"account", SecretServiceLoader::ATTR_STRING},
                     }};
   }
 
   static std::string hashKey(const char *key) {
-    // FNV-1a 64-bit hex — filename/attribute safe, not a MAC.
     uint64_t h = 14695981039346656037ull;
     for (const unsigned char *p = (const unsigned char *)key; *p; ++p) {
       h ^= *p;
@@ -64,6 +64,8 @@ class SecretStorage {
     return std::string(buf);
   }
 
+  SecretServiceLoader &lib() const { return SecretServiceLoader::instance(); }
+
 public:
   SecretStorage(const SecretStorage &) = delete;
   SecretStorage &operator=(const SecretStorage &) = delete;
@@ -71,8 +73,8 @@ public:
   SecretStorage &operator=(SecretStorage &&) = delete;
 
   const char *getLabel() { return label.c_str(); }
-  void setLabel(const char *label) {
-    this->label = label;
+  void setLabel(const char *new_label) {
+    this->label = new_label;
     rebuildSchema();
   }
 
@@ -102,7 +104,7 @@ public:
     attrs.insert("storage-key-hash", hashKey(key).c_str());
     attrs.insert("record-version", "2");
 
-    secret_autofree gchar *result = secret_password_lookupv_sync(
+    fss_secret_autofree gchar *result = lib().lookupv_sync(
         &item_schema, attrs.getGHashTable(), nullptr, &err);
     if (err) {
       throw std::string(err->message);
@@ -121,8 +123,7 @@ public:
     attrs.insert("account-name", account_name.c_str());
     attrs.insert("storage-key-hash", hashKey(key).c_str());
     attrs.insert("record-version", "2");
-    secret_password_clearv_sync(&item_schema, attrs.getGHashTable(), nullptr,
-                                &err);
+    lib().clearv_sync(&item_schema, attrs.getGHashTable(), nullptr, &err);
     if (err) {
       throw std::string(err->message);
     }
@@ -130,7 +131,6 @@ public:
 
   bool deleteKeyring() {
     ensureMigrated();
-    // Delete all v2 items for this account, then legacy JSON blob.
     auto all = readAllItems();
     for (const auto &entry : all) {
       deleteItem(entry.first.c_str());
@@ -141,9 +141,9 @@ public:
   bool storeToKeyring(nlohmann::json value) {
     const std::string output = value.dump();
     g_autoptr(GError) err = nullptr;
-    bool result = secret_password_storev_sync(
-        &the_schema, m_attributes.getGHashTable(), nullptr, label.c_str(),
-        output.c_str(), nullptr, &err);
+    bool result = lib().storev_sync(&the_schema, m_attributes.getGHashTable(),
+                                    nullptr, label.c_str(), output.c_str(),
+                                    nullptr, &err);
 
     if (err) {
       throw std::string(err->message);
@@ -157,7 +157,7 @@ public:
 
     warmupKeyring();
 
-    secret_autofree gchar *result = secret_password_lookupv_sync(
+    fss_secret_autofree gchar *result = lib().lookupv_sync(
         &the_schema, m_attributes.getGHashTable(), nullptr, &err);
 
     if (err) {
@@ -171,7 +171,6 @@ public:
 
   std::map<std::string, std::string> readAllItems() {
     ensureMigrated();
-    // Search is limited by libsecret; we keep an index item.
     nlohmann::json index = readIndex();
     std::map<std::string, std::string> out;
     if (!index.is_object()) {
@@ -196,9 +195,8 @@ private:
     attrs.insert("record-version", "2");
 
     std::string item_label = label + "/" + hashKey(key);
-    bool ok = secret_password_storev_sync(
-        &item_schema, attrs.getGHashTable(), nullptr, item_label.c_str(),
-        value, nullptr, &err);
+    bool ok = lib().storev_sync(&item_schema, attrs.getGHashTable(), nullptr,
+                                item_label.c_str(), value, nullptr, &err);
     if (err) {
       throw std::string(err->message);
     }
@@ -220,7 +218,7 @@ private:
     FHashTable attrs;
     const std::string account_attr = indexAccountAttr();
     attrs.insert("account", account_attr.c_str());
-    secret_autofree gchar *result = secret_password_lookupv_sync(
+    fss_secret_autofree gchar *result = lib().lookupv_sync(
         &index_schema, attrs.getGHashTable(), nullptr, &err);
     if (err || result == NULL || strcmp(result, "") == 0) {
       return nlohmann::json::object();
@@ -234,9 +232,9 @@ private:
     const std::string account_attr = indexAccountAttr();
     attrs.insert("account", account_attr.c_str());
     const std::string payload = index.dump();
-    bool ok = secret_password_storev_sync(
-        &index_schema, attrs.getGHashTable(), nullptr, index_label.c_str(),
-        payload.c_str(), nullptr, &err);
+    bool ok = lib().storev_sync(&index_schema, attrs.getGHashTable(), nullptr,
+                                index_label.c_str(), payload.c_str(), nullptr,
+                                &err);
     if (!ok || err) {
       throw std::string(err ? err->message : "failed to write index");
     }
@@ -253,7 +251,6 @@ private:
       return;
     }
 
-    // Migrate each key to a v2 item; keep legacy until all verified.
     std::vector<std::string> verified;
     for (auto it = legacy.begin(); it != legacy.end(); ++it) {
       if (!it.value().is_string()) {
@@ -264,13 +261,13 @@ private:
       storeItem(key.c_str(), value.c_str());
       auto roundtrip = getItem(key.c_str());
       if (roundtrip != value) {
-        throw std::string("migrationFailed: verification mismatch for key hash");
+        throw std::string(
+            "migrationFailed: verification mismatch for key hash");
       }
       verified.push_back(key);
     }
 
     if (verified.size() == legacy.size()) {
-      // Safe to clear legacy JSON blob only after full verification.
       storeToKeyring(nlohmann::json());
     }
     migrated_ = true;
@@ -289,13 +286,14 @@ private:
         "explanation",
         "Because of quirks in the gnome libsecret API, "
         "flutter_secret_storage needs to store a dummy entry to guarantee that "
-        "this keyring was properly unlocked. More details at http://crbug.com/660005.");
+        "this keyring was properly unlocked. More details at "
+        "http://crbug.com/660005.");
 
     const gchar *dummy_label = "FlutterSecureStorage Control";
 
-    bool success = secret_password_storev_sync(
-        NULL, attributes.getGHashTable(), nullptr, dummy_label,
-        "The meaning of life", nullptr, &err);
+    bool success = lib().storev_sync(nullptr, attributes.getGHashTable(),
+                                     nullptr, dummy_label, "The meaning of life",
+                                     nullptr, &err);
 
     if (!success) {
       throw std::string("Failed to unlock the keyring");

@@ -79,7 +79,24 @@ See CI / local test run summary in the PR. Expected:
 
 ## Release commit / tag
 
-Filled after promotion:
-
-- Release commit: _(see `main`)_
+- Release commit: `0bed61cd72007af7ce96e5c6fb117f23b509f598` (on `main` and feature branch)
 - Release tag: `desktop-secure-storage-v11.0.0`
+- fl-start pin tag: `v11.0.0-fl.1`
+- Feature PR into develop: https://github.com/fl-start/flutter_secure_storage/pull/1
+
+## Tests executed (local)
+
+| Suite | Result |
+|-------|--------|
+| platform_interface `test/desktop` | passed |
+| windows package `flutter test` | passed |
+| main package unit + iOS options regression | passed |
+| Physical TPM integration | not available / skipped |
+| Linux/macOS example builds | CI Desktop Smoke |
+
+## Known follow-ups
+
+- Full NCrypt-persisted non-exportable TPM private keys on Windows
+- Complete Linux private-key create/sign/export beyond capability channel
+- Standards-complete PKCS#10 CSR encoding
+- Merge PR #1 into `develop` (no auto-merge); `main` already points at the release commit

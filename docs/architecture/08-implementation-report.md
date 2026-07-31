@@ -73,8 +73,8 @@ See CI / local test run summary in the PR. Expected:
 ## Known limitations
 
 - Windows non-exportable “hardware” path currently probes TPM and stores software material with accurate export refusal; full NCrypt persisted non-exportable keys are the next hardening step.
-- Linux private-key create/sign/export is implemented (software keys + SS/file DEK wrap); TPM-resident private keys remain future work (`hardwareBackedRequired` fails closed).
-- CSR payloads use an internal `FSS-CSR1` bundle pending full PKCS#10 ASN.1.
+- Linux TPM-resident keys use optional `tpm2-tools`; ESAPI dlopen remains a capability probe.
+- Linux/Windows software keys use standards PKCS#8 PBES2 + PKCS#10; macOS still uses FSS-EPK1 / FSS-CSR1.
 - Dart `String` export passphrases cannot be wiped.
 
 ## Release commit / tag
@@ -97,6 +97,6 @@ See CI / local test run summary in the PR. Expected:
 ## Known follow-ups
 
 - Full NCrypt-persisted non-exportable TPM private keys on Windows
-- Linux TPM2-resident private-key create/sign (beyond probe + fail-closed)
-- Standards-complete PKCS#10 CSR encoding
+- macOS migration from FSS-EPK1 / FSS-CSR1 to standards PKCS#8 / PKCS#10
+- Direct ESAPI (no tpm2-tools) private-key path on Linux
 - Sync `develop` with `main` release history

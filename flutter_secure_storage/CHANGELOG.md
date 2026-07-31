@@ -1,3 +1,11 @@
+## 11.0.3
+
+### Linux completeness (fl-start)
+- TPM2-resident keys via optional `tpm2-tools` (create/sign/delete).
+- Optional `systemd-creds` DEK wrap.
+- Standards PKCS#8 PBES2 export/import + PKCS#10 CSR; real ECDSA/RSA sign (shared `DesktopCrypto`).
+- Depends on `flutter_secure_storage_linux` ^4.2.0 and `platform_interface` ^2.2.0.
+
 ## 11.0.2
 
 ### Linux private-key artifacts (fl-start)

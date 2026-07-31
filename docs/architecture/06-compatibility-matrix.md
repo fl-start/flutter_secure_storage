@@ -6,11 +6,11 @@
 |------------|---------|-------|-------|
 | Existing KV API | Yes (DPAPI JSON + legacy CredMan) | Yes (Keychain) | Yes (libsecret JSON → per-item; protected-file fallback) |
 | FSS1 versioned records | Private keys | Private keys | Private keys (+ protected-file KV) |
-| Hardware preferred fallback | TPM → DPAPI | SE → Keychain | TPM probe → Secret Service → file |
-| Hardware required fail-closed | Yes | Yes | Yes (TPM probe; key path not yet implemented) |
-| Exportable encrypted PKCS#8 | Yes (FSS-EPK1) | Yes (FSS-EPK1) | Yes (FSS-EPK1) |
+| Hardware preferred fallback | TPM → DPAPI | SE → Keychain | TPM2 tools → SS/systemd-creds → file |
+| Hardware required fail-closed | Yes | Yes | Yes (TPM2 tools create/sign when available) |
+| Exportable encrypted PKCS#8 | Yes (PBES2) | Yes (FSS-EPK1) | Yes (PBES2) |
 | Non-exportable refuse export | Yes | Yes | Yes |
-| CSR without export | Yes (FSS-CSR1) | Yes (FSS-CSR1) | Yes (FSS-CSR1) |
+| CSR without export | Yes (PKCS#10) | Yes (FSS-CSR1) | Yes (PKCS#10) |
 | Machine scope | DPAPI LOCAL_MACHINE | Not for private keys | N/A (rejected) |
 | User presence | Limited | Yes (SE / ACL) | No |
 | Headless | Yes | Limited | Protected file (no keyring required) |

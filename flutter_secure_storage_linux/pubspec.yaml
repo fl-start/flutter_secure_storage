@@ -1,7 +1,7 @@
 name: flutter_secure_storage_linux
 description: Linux implementation of flutter_secure_storage
 repository: https://github.com/fl-start/flutter_secure_storage/tree/develop/flutter_secure_storage_linux
-version: 4.1.0
+version: 4.2.0
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_secure_storage_platform_interface: ^2.1.0
+  flutter_secure_storage_platform_interface: ^2.2.0
   path: ^1.8.0
   pointycastle: ^3.9.1
 

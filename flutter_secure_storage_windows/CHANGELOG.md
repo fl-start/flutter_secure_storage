@@ -1,3 +1,9 @@
+## 5.1.0
+
+* Standards PKCS#8 PBES2 export/import and PKCS#10 CSR via shared `DesktopCrypto`.
+* Real ECDSA/RSA signatures for software keys.
+* Depends on `flutter_secure_storage_platform_interface` ^2.2.0.
+
 ## 5.0.0
 
 * Added Windows desktop private-key manager (DPAPI-wrapped FSS1 records, TPM probe, export policy enforcement).

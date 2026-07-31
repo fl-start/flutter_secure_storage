@@ -1,3 +1,11 @@
+## 4.2.0
+
+- TPM2-resident private keys via optional `tpm2-tools` (`hardwareBackedRequired` / preferred when available).
+- Optional `systemd-creds` DEK wrap provider.
+- Standards PKCS#8 PBES2 (AES-256-CBC) export/import and PKCS#10 CSR via shared `DesktopCrypto`.
+- Real ECDSA/RSA signatures for software keys.
+- Depends on `flutter_secure_storage_platform_interface` ^2.2.0.
+
 ## 4.1.0
 
 - Added Linux desktop private-key manager (`LinuxDesktopKeyManager`) with FSS1 records, FSS-EPK1 export, and FSS-CSR1 CSR generation (Windows parity).

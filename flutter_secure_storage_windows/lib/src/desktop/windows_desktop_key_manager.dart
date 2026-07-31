@@ -213,9 +213,9 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     const claimPrivateHw = false;
     const claimStorageHw = false;
 
-    final pair = _generateSoftwareKey(options.algorithm);
+    final pair = DesktopCrypto.generate(options.algorithm);
     final dek = _randomBytes(32);
-    final encryptedPkcs8 = _aesGcmEncrypt(dek, pair.privateBlob);
+    final encryptedPkcs8 = _aesGcmEncrypt(dek, pair.privateKeyPkcs8Der);
     final wrappedDek = _dpapiProtect(
       dek,
       machineScoped: options.machineScoped,
@@ -267,11 +267,12 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
 
     keys[keyId] = <String, dynamic>{
       ...handle.toMap(),
-      'publicKeySpki': base64Encode(pair.publicBlob),
+      'publicKeySpki': base64Encode(pair.publicKeySpkiDer),
     };
     meta['keys'] = keys;
     await _saveMeta(meta);
-    _zero(pair.privateBlob);
+    _zero(pair.privateKeyPkcs8Der);
+    _zero(pair.legacyPrivateBlob);
     return handle;
   }
 
@@ -335,7 +336,12 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
           message: 'private key not found',
         );
       }
-      return _sign(privateDer, data, handle.algorithm);
+      return DesktopCrypto.sign(
+        privateDer,
+        data,
+        keyAlgorithm: handle.algorithm,
+        signatureAlgorithm: algorithm,
+      );
     } finally {
       _zero(privateDer);
     }
@@ -364,7 +370,7 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     try {
       final passphrase = options.passphraseBytes ??
           Uint8List.fromList(utf8.encode(options.passphrase!));
-      final encrypted = _encryptPkcs8Pbes2(
+      final encrypted = DesktopCrypto.encryptPkcs8Pbes2(
         privateDer,
         passphrase,
         iterations: options.pbkdf2Iterations ?? 310000,
@@ -377,11 +383,8 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
           kdf: PrivateKeyKdf.pbkdf2Sha256,
         );
       }
-      final pem = '-----BEGIN ENCRYPTED PRIVATE KEY-----\n'
-          '${_pemWrap(base64.encode(encrypted))}'
-          '-----END ENCRYPTED PRIVATE KEY-----\n';
       return ExportedPrivateKey(
-        bytes: Uint8List.fromList(utf8.encode(pem)),
+        bytes: DesktopCrypto.toPem(encrypted, 'ENCRYPTED PRIVATE KEY'),
         encoding: PrivateKeyEncoding.pemPkcs8,
         kdf: PrivateKeyKdf.pbkdf2Sha256,
       );
@@ -395,11 +398,54 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     Uint8List encryptedKey,
     PrivateKeyImportOptions options,
   ) async {
-    throw const DesktopSecureStorageException(
-      code: DesktopSecureStorageErrorCode.invalidConfiguration,
-      message:
-          'importPrivateKey for encrypted PKCS#8 is staged; create exportable keys via createPrivateKey',
+    final keyId = normalizeAndValidateKeyId(options.keyId);
+    final passphrase = options.passphraseBytes ??
+        Uint8List.fromList(utf8.encode(options.passphrase ?? ''));
+    if (passphrase.isEmpty) {
+      throw const DesktopSecureStorageException(
+        code: DesktopSecureStorageErrorCode.invalidExportPassphrase,
+        message: 'import passphrase must be non-empty',
+      );
+    }
+    final pkcs8 =
+        DesktopCrypto.decryptEncryptedPrivateKey(encryptedKey, passphrase);
+    _zero(passphrase);
+    final created = await createPrivateKey(
+      DesktopPrivateKeyOptions(
+        keyId: keyId,
+        algorithm: DesktopKeyAlgorithm.ecP256,
+        protection: options.protection,
+        exportPolicy: PrivateKeyExportPolicy.exportableEncrypted,
+        machineScoped: options.machineScoped,
+        requireUserPresence: options.requireUserPresence,
+      ),
     );
+    // Overwrite generated material with imported PKCS#8.
+    final dek = _randomBytes(32);
+    final encryptedPkcs8 = _aesGcmEncrypt(dek, pkcs8);
+    final wrappedDek = _dpapiProtect(dek, machineScoped: options.machineScoped);
+    _zero(dek);
+    final record = DesktopSecureRecord(
+      formatVersion: kDesktopRecordFormatVersion,
+      providerId: DesktopRecordProviderId.windowsSoftwareCng,
+      flags: DesktopRecordFlags.exportablePrivateKey |
+          (options.machineScoped ? DesktopRecordFlags.machineScoped : 0),
+      algorithmId: DesktopKeyAlgorithm.ecP256.index + 1,
+      keyIdHash: keyIdSha256(keyId),
+      createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+      nonce: encryptedPkcs8.nonce,
+      tag: encryptedPkcs8.tag,
+      wrappedKey: wrappedDek,
+      ciphertext: encryptedPkcs8.ciphertext,
+      aad: Uint8List.fromList(utf8.encode(keyId)),
+    );
+    final root = await _root();
+    final path = p.join(root.path, '${sanitizeKeyIdForFilename(keyId)}.fss1');
+    final tmp = File('$path.tmp');
+    await tmp.writeAsBytes(const DesktopRecordCodec().encode(record), flush: true);
+    await tmp.rename(path);
+    _zero(pkcs8);
+    return ImportedPrivateKey(handle: created);
   }
 
   @override
@@ -432,15 +478,14 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
           message: 'private key not found',
         );
       }
-      final subject = utf8.encode(options.subjectDistinguishedName);
-      final signature = _sign(privateDer, Uint8List.fromList(subject), handle.algorithm);
-      final out = BytesBuilder()
-        ..add(utf8.encode('FSS-CSR1'))
-        ..add(_u32(subject.length))
-        ..add(subject)
-        ..add(_u32(signature.length))
-        ..add(signature);
-      return out.toBytes();
+      final pub = await getPublicKey(keyId);
+      return DesktopCrypto.createPkcs10Csr(
+        privateKeyPkcs8Der: privateDer,
+        publicKeySpkiDer: pub,
+        algorithm: handle.algorithm,
+        subjectDn: options.subjectDistinguishedName,
+        dnsNames: options.dnsNames,
+      );
     } finally {
       _zero(privateDer);
     }
@@ -481,95 +526,16 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
       machineScoped: handle.machineScoped,
     );
     try {
-      return _aesGcmDecrypt(
+      final plain = _aesGcmDecrypt(
         dek,
         nonce: record.nonce,
         tag: record.tag,
         ciphertext: record.ciphertext,
       );
+      return DesktopCrypto.toPkcs8Der(plain, algorithm: handle.algorithm);
     } finally {
       _zero(dek);
     }
-  }
-
-  _KeyPair _generateSoftwareKey(DesktopKeyAlgorithm algorithm) {
-    final secureRandom = _secureRandom();
-    switch (algorithm) {
-      case DesktopKeyAlgorithm.ecP256:
-        final domain = ECDomainParameters('prime256v1');
-        final keyGen = ECKeyGenerator()
-          ..init(
-            ParametersWithRandom(
-              ECKeyGeneratorParameters(domain),
-              secureRandom,
-            ),
-          );
-        final key = keyGen.generateKeyPair();
-        final priv = key.privateKey as ECPrivateKey;
-        final pub = key.publicKey as ECPublicKey;
-        final d = _bigIntToBytes(priv.d!, 32);
-        final q = pub.Q!.getEncoded(false);
-        return _KeyPair(
-          privateBlob: Uint8List.fromList(<int>[...utf8.encode('ECP256PRIV'), ...d, ...q]),
-          publicBlob: Uint8List.fromList(<int>[...utf8.encode('ECP256PUB_'), ...q]),
-        );
-      case DesktopKeyAlgorithm.rsa2048:
-      case DesktopKeyAlgorithm.rsa3072:
-        final bits = algorithm == DesktopKeyAlgorithm.rsa2048 ? 2048 : 3072;
-        final keyGen = RSAKeyGenerator()
-          ..init(
-            ParametersWithRandom(
-              RSAKeyGeneratorParameters(BigInt.parse('65537'), bits, 64),
-              secureRandom,
-            ),
-          );
-        final key = keyGen.generateKeyPair();
-        final priv = key.privateKey as RSAPrivateKey;
-        final pub = key.publicKey as RSAPublicKey;
-        final n = _bigIntToBytes(priv.n!);
-        final d = _bigIntToBytes(priv.privateExponent!);
-        final e = _bigIntToBytes(pub.exponent!);
-        return _KeyPair(
-          privateBlob: Uint8List.fromList(<int>[
-            ...utf8.encode('RSAPRIV1'),
-            ..._u32(n.length),
-            ...n,
-            ..._u32(d.length),
-            ...d,
-          ]),
-          publicBlob: Uint8List.fromList(<int>[
-            ...utf8.encode('RSAPUB1_'),
-            ..._u32(n.length),
-            ...n,
-            ..._u32(e.length),
-            ...e,
-          ]),
-        );
-      case DesktopKeyAlgorithm.ed25519:
-        final seed = _randomBytes(32);
-        return _KeyPair(
-          privateBlob:
-              Uint8List.fromList(<int>[...utf8.encode('ED25519SEED'), ...seed]),
-          publicBlob: Uint8List.fromList(
-            <int>[...utf8.encode('ED25519PUB_'), ..._randomBytes(32)],
-          ),
-        );
-    }
-  }
-
-  Uint8List _sign(
-    Uint8List privateDer,
-    Uint8List data,
-    DesktopKeyAlgorithm keyAlg,
-  ) {
-    final digest = SHA256Digest();
-    final out = Uint8List(digest.digestSize);
-    final joined = Uint8List.fromList(<int>[...privateDer, ...data]);
-    digest.update(joined, 0, joined.length);
-    digest.doFinal(out, 0);
-    _zero(joined);
-    // Binding signature for opaque-handle signing without exporting key bytes.
-    return out;
   }
 
   Uint8List _dpapiProtect(Uint8List plain, {required bool machineScoped}) {
@@ -652,12 +618,6 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
   }
 }
 
-class _KeyPair {
-  _KeyPair({required this.privateBlob, required this.publicBlob});
-  final Uint8List privateBlob;
-  final Uint8List publicBlob;
-}
-
 class _AesGcmBlob {
   _AesGcmBlob({
     required this.nonce,
@@ -667,12 +627,6 @@ class _AesGcmBlob {
   final Uint8List nonce;
   final Uint8List tag;
   final Uint8List ciphertext;
-}
-
-SecureRandom _secureRandom() {
-  final rnd = FortunaRandom();
-  rnd.seed(KeyParameter(_randomBytes(32)));
-  return rnd;
 }
 
 Uint8List _randomBytes(int length) {
@@ -719,51 +673,6 @@ Uint8List _aesGcmDecrypt(
     );
   }
 }
-
-Uint8List _encryptPkcs8Pbes2(
-  Uint8List privateKeyDer,
-  Uint8List passphrase, {
-  required int iterations,
-}) {
-  final salt = _randomBytes(16);
-  final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
-    ..init(Pbkdf2Parameters(salt, iterations, 32));
-  final key = derivator.process(passphrase);
-  final blob = _aesGcmEncrypt(key, privateKeyDer);
-  final out = BytesBuilder()
-    ..add(utf8.encode('FSS-EPK1'))
-    ..add(_u32(iterations))
-    ..addByte(salt.length)
-    ..add(salt)
-    ..addByte(blob.nonce.length)
-    ..add(blob.nonce)
-    ..addByte(blob.tag.length)
-    ..add(blob.tag)
-    ..add(_u32(blob.ciphertext.length))
-    ..add(blob.ciphertext);
-  return out.toBytes();
-}
-
-Uint8List _bigIntToBytes(BigInt value, [int? minLen]) {
-  var hex = value.toRadixString(16);
-  if (hex.length.isOdd) {
-    hex = '0$hex';
-  }
-  final bytes = Uint8List.fromList([
-    for (var i = 0; i < hex.length; i += 2)
-      int.parse(hex.substring(i, i + 2), radix: 16),
-  ]);
-  if (minLen == null || bytes.length >= minLen) {
-    return bytes;
-  }
-  return Uint8List.fromList(<int>[
-    ...List<int>.filled(minLen - bytes.length, 0),
-    ...bytes,
-  ]);
-}
-
-Uint8List _u32(int value) =>
-    (ByteData(4)..setUint32(0, value, Endian.little)).buffer.asUint8List();
 
 String _pemWrap(String b64) {
   final buffer = StringBuffer();

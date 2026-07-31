@@ -1,3 +1,8 @@
+## 2.2.0
+
+* Added `DesktopCrypto` helpers: PKCS#8 PBES2 (AES-256-CBC) export/import, PKCS#10 CSR, real ECDSA/RSA sign, legacy FSS blob dual-read.
+* Depends on `pointycastle` for ASN.1 and crypto primitives.
+
 ## 2.1.0
 
 * Added desktop private-key API types, capability model, typed errors, and FSS1 record codec.

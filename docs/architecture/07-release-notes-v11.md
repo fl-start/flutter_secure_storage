@@ -17,8 +17,12 @@
 ## Tagging
 
 - Production branch: `main`
-- Immutable tags: `desktop-secure-storage-v11.0.0`, `v11.0.1`, `v11.0.2`
-- fl-start pins: `v11.0.0-fl.1`, `v11.0.1-fl.1`, `v11.0.2-fl.1`
+- Immutable tags: `desktop-secure-storage-v11.0.0` … `v11.0.3`
+- fl-start pins: `v11.0.0-fl.1` … `v11.0.3-fl.1`
+
+## 11.0.3 (Linux completeness)
+
+- TPM2-resident keys (`tpm2-tools`), systemd-creds wrap, PKCS#8/PKCS#10 + import
 
 ## 11.0.2 (Linux private keys)
 

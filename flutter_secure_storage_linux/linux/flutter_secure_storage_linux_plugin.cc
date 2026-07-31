@@ -298,6 +298,9 @@ static FlValue *buildCapabilities(FlValue *args) {
   const bool secret = SecretServiceLoader::instance().available();
   const bool session = SecretServiceLoader::sessionBusPresent();
   const bool tpm = fss_probe_tpm2_available();
+  const bool systemd =
+      g_file_test("/usr/bin/systemd-creds", G_FILE_TEST_IS_EXECUTABLE) ||
+      g_file_test("/bin/systemd-creds", G_FILE_TEST_IS_EXECUTABLE);
   const bool headless = !session;
 
   FlValue *map = fl_value_new_map();
@@ -309,7 +312,10 @@ static FlValue *buildCapabilities(FlValue *args) {
   }
   fl_value_append_take(providers, fl_value_new_string("protected_file"));
   if (tpm) {
-    fl_value_append_take(providers, fl_value_new_string("tpm2_optional"));
+    fl_value_append_take(providers, fl_value_new_string("tpm2"));
+  }
+  if (systemd) {
+    fl_value_append_take(providers, fl_value_new_string("systemd_creds"));
   }
   fl_value_set_string_take(map, "availableProviders", providers);
 
@@ -320,21 +326,21 @@ static FlValue *buildCapabilities(FlValue *args) {
   gboolean privateHw = FALSE;
 
   if (protection == "hardwareBackedRequired") {
-    selected = tpm ? "tpm2_optional" : "none";
-    storageHw = FALSE; // TPM key path not implemented yet
-    privateHw = FALSE;
+    selected = tpm ? "tpm2" : "none";
+    storageHw = tpm ? TRUE : FALSE;
+    privateHw = tpm ? TRUE : FALSE;
     if (!tpm) {
-      fallback = "TPM2 ESAPI unavailable";
-    } else {
-      fallback = "TPM2 private-key path not implemented";
+      fallback = "TPM2 unavailable (libtss2-esys / tpm2-tools)";
     }
   } else if (protection == "hardwareBackedPreferred") {
     if (tpm) {
-      selected = secret && session ? "secret_service" : "protected_file";
-      fallback = "TPM2 private-key path not implemented; using software wrap";
+      selected = "tpm2";
     } else if (secret && session && !headless) {
       selected = "secret_service";
-      fallback = "TPM / libtss2-esys unavailable";
+      fallback = "TPM unavailable; using Secret Service";
+    } else if (systemd) {
+      selected = "systemd_creds";
+      fallback = "TPM unavailable; using systemd-creds";
     } else {
       selected = "protected_file";
       fallback = "TPM unavailable; Secret Service unavailable or headless";
@@ -345,6 +351,9 @@ static FlValue *buildCapabilities(FlValue *args) {
     // platformDefault
     if (secret && session && !headless) {
       selected = "secret_service";
+    } else if (systemd) {
+      selected = "systemd_creds";
+      fallback = "Secret Service unavailable; using systemd-creds";
     } else {
       selected = "protected_file";
       if (!secret) {

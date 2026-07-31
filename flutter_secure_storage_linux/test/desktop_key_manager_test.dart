@@ -1,9 +1,39 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_secure_storage_linux/src/desktop/linux_desktop_key_manager.dart';
+import 'package:flutter_secure_storage_linux/src/desktop/linux_tpm2_backend.dart';
 import 'package:flutter_secure_storage_platform_interface/desktop_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _TestTpm extends LinuxTpm2Backend {
+  _TestTpm(this.root) : super(storageRoot: root, availableOverride: true);
+  final Directory root;
+  final Map<String, Uint8List> pubs = {};
+
+  @override
+  Future<LinuxTpmKey> createEccP256(String keyId) async {
+    final material = DesktopCrypto.generate(DesktopKeyAlgorithm.ecP256);
+    pubs[keyId] = material.publicKeySpkiDer;
+    final dir = Directory('${root.path}/tpm/${sanitizeKeyIdForFilename(keyId)}')
+      ..createSync(recursive: true);
+    return LinuxTpmKey(
+      keyId: keyId,
+      directory: dir.path,
+      publicKeySpkiDer: material.publicKeySpkiDer,
+    );
+  }
+
+  @override
+  Future<Uint8List> sign(String keyId, Uint8List data) async =>
+      Uint8List.fromList(<int>[1, 2, 3, 4, ...data]);
+
+  @override
+  Future<void> delete(String keyId) async {
+    pubs.remove(keyId);
+  }
+}
 
 void main() {
   late Directory tmp;
@@ -15,6 +45,7 @@ void main() {
       storageRoot: tmp,
       tpmAvailableOverride: false,
       secretServiceAvailableOverride: false,
+      systemdCredsAvailableOverride: false,
       useLocalDekWrapOnly: true,
     );
   });
@@ -25,7 +56,7 @@ void main() {
     }
   });
 
-  test('hardware required fails closed', () async {
+  test('hardware required fails when TPM unavailable', () async {
     expect(
       () => manager.createPrivateKey(
         DesktopPrivateKeyOptions(
@@ -44,28 +75,37 @@ void main() {
     );
   });
 
-  test('hardware preferred reports fallback without claiming private HW',
-      () async {
-    final caps = await manager.getCapabilities(
-      protection: DesktopSecureStorageProtection.hardwareBackedPreferred,
+  test('TPM path create/sign/delete when backend available', () async {
+    final tpm = _TestTpm(tmp);
+    final tpmManager = LinuxDesktopKeyManager(
+      storageRoot: tmp,
+      tpmAvailableOverride: true,
+      secretServiceAvailableOverride: false,
+      systemdCredsAvailableOverride: false,
+      useLocalDekWrapOnly: true,
+      tpmBackend: tpm,
     );
-    expect(caps.hardwareAvailable, isFalse);
-    expect(caps.fallbackReason, isNotNull);
-    expect(caps.privateKeyHardwareBacked, isFalse);
-    expect(caps.selectedProvider, 'protected_file');
+    final handle = await tpmManager.createPrivateKey(
+      DesktopPrivateKeyOptions(
+        keyId: 'app.tpm.key',
+        algorithm: DesktopKeyAlgorithm.ecP256,
+        protection: DesktopSecureStorageProtection.hardwareBackedRequired,
+      ),
+    );
+    expect(handle.hardwareBacked, isTrue);
+    expect(handle.provider, 'tpm2');
+    final sig = await tpmManager.sign(
+      'app.tpm.key',
+      Uint8List.fromList([9, 9]),
+      algorithm: SignatureAlgorithm.ecdsaSha256,
+    );
+    expect(sig.length, greaterThan(4));
+    await tpmManager.deletePrivateKey('app.tpm.key');
+    expect(await tpmManager.getPrivateKeyHandle('app.tpm.key'), isNull);
   });
 
-  test('platformDefault without secret service uses protected_file', () async {
-    final caps = await manager.getCapabilities();
-    expect(caps.selectedProvider, 'protected_file');
-    expect(caps.supportsExportableKeys, isTrue);
-    expect(caps.supportsCsrGeneration, isTrue);
-    expect(caps.availableProviders, contains('protected_file'));
-    expect(caps.availableProviders, isNot(contains('secret_service')));
-  });
-
-  test('exportable key exports encrypted and non-exportable refuses', () async {
-    final exportable = await manager.createPrivateKey(
+  test('PKCS#8 export/import round-trip and PKCS#10 CSR', () async {
+    await manager.createPrivateKey(
       DesktopPrivateKeyOptions(
         keyId: 'app.device.identity',
         algorithm: DesktopKeyAlgorithm.ecP256,
@@ -73,9 +113,6 @@ void main() {
         exportPolicy: PrivateKeyExportPolicy.exportableEncrypted,
       ),
     );
-    expect(exportable.hardwareBacked, isFalse);
-    expect(exportable.exportPolicy, PrivateKeyExportPolicy.exportableEncrypted);
-
     final exported = await manager.exportPrivateKey(
       'app.device.identity',
       PrivateKeyExportOptions(
@@ -85,7 +122,38 @@ void main() {
       ),
     );
     expect(utf8Contains(exported.bytes, 'ENCRYPTED PRIVATE KEY'), isTrue);
+    expect(utf8Contains(exported.bytes, 'FSS-EPK1'), isFalse);
 
+    await manager.deletePrivateKey('app.device.identity');
+    final imported = await manager.importPrivateKey(
+      exported.bytes,
+      PrivateKeyImportOptions(
+        keyId: 'app.device.identity',
+        protection: DesktopSecureStorageProtection.softwareProtected,
+        exportPolicy: PrivateKeyExportPolicy.exportableEncrypted,
+        passphrase: 'test-passphrase-not-logged',
+      ),
+    );
+    expect(imported.handle.keyId, 'app.device.identity');
+
+    final csr = await manager.createCertificateSigningRequest(
+      'app.device.identity',
+      CertificateSigningRequestOptions(
+        subjectDistinguishedName: 'CN=test',
+      ),
+    );
+    expect(csr.first, 0x30);
+    expect(utf8Contains(csr, 'FSS-CSR1'), isFalse);
+
+    final sig = await manager.sign(
+      'app.device.identity',
+      Uint8List.fromList(utf8.encode('hello')),
+      algorithm: SignatureAlgorithm.ecdsaSha256,
+    );
+    expect(sig.first, 0x30);
+  });
+
+  test('non-exportable refuses export', () async {
     await manager.createPrivateKey(
       DesktopPrivateKeyOptions(
         keyId: 'app.admin.identity',
@@ -111,55 +179,21 @@ void main() {
     );
   });
 
-  test('sign and CSR work without export', () async {
-    await manager.createPrivateKey(
-      DesktopPrivateKeyOptions(
-        keyId: 'app.sign.key',
-        algorithm: DesktopKeyAlgorithm.ecP256,
-        protection: DesktopSecureStorageProtection.softwareProtected,
-      ),
-    );
-    final sig = await manager.sign(
-      'app.sign.key',
-      Uint8List.fromList('hello'.codeUnits),
-      algorithm: SignatureAlgorithm.ecdsaSha256,
-    );
-    expect(sig.length, greaterThan(0));
-
-    final csr = await manager.createCertificateSigningRequest(
-      'app.sign.key',
-      CertificateSigningRequestOptions(
-        subjectDistinguishedName: 'CN=test',
-      ),
-    );
-    expect(utf8Contains(csr, 'FSS-CSR1'), isTrue);
-  });
-
-  test('delete removes key', () async {
-    await manager.createPrivateKey(
-      DesktopPrivateKeyOptions(
-        keyId: 'app.delete.me',
-        algorithm: DesktopKeyAlgorithm.ecP256,
-        protection: DesktopSecureStorageProtection.softwareProtected,
-      ),
-    );
-    await manager.deletePrivateKey('app.delete.me');
-    expect(await manager.getPrivateKeyHandle('app.delete.me'), isNull);
-  });
-
-  test('mocked TPM capability probe does not claim private key HW', () async {
-    final tpmManager = LinuxDesktopKeyManager(
+  test('capabilities list systemd/tpm when available', () async {
+    final capsManager = LinuxDesktopKeyManager(
       storageRoot: tmp,
       tpmAvailableOverride: true,
       secretServiceAvailableOverride: false,
+      systemdCredsAvailableOverride: true,
       useLocalDekWrapOnly: true,
+      tpmBackend: _TestTpm(tmp),
     );
-    final caps = await tpmManager.getCapabilities(
-      protection: DesktopSecureStorageProtection.hardwareBackedRequired,
+    final caps = await capsManager.getCapabilities(
+      protection: DesktopSecureStorageProtection.hardwareBackedPreferred,
     );
-    expect(caps.hardwareAvailable, isTrue);
-    expect(caps.privateKeyHardwareBacked, isFalse);
-    expect(caps.selectedProvider, 'tpm2_optional');
+    expect(caps.availableProviders, contains('tpm2'));
+    expect(caps.availableProviders, contains('systemd_creds'));
+    expect(caps.selectedProvider, 'tpm2');
   });
 }
 

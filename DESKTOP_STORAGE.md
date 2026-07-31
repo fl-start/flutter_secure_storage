@@ -17,7 +17,7 @@ See also:
 |----------|------------|------------------|--------------|
 | macOS | Keychain (`kSecClassGenericPassword`) | `MacOsOptions.accountName` → `kSecAttrService` | SE / Keychain (`#if os(macOS)` only) |
 | Windows | DPAPI + JSON file (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
-| Linux | Soft-loaded libsecret per-key items + protected-file fallback | `LinuxOptions.accountName` | FSS1 software keys + SS/file DEK wrap; TPM probe only |
+| Linux | Soft-loaded libsecret per-key items + protected-file / systemd-creds fallback | `LinuxOptions.accountName` | FSS1 + PKCS#8/PKCS#10; TPM2 tools for hardware keys |
 
 ## Key-value storage
 
@@ -39,8 +39,9 @@ See also:
 - After upgrade, values migrate from a single JSON secret to **one secret per logical key**.
 - Legacy JSON item is deleted only after every migrated item is verified.
 - Headless / no session bus / missing libsecret: protected-file backend under `$XDG_DATA_HOME/<app>/secure-storage/` (mode `0700`/`0600`).
-- Private keys: Dart `LinuxDesktopKeyManager` with FSS1 records; DEK wrap via Secret Service or protected-file.
-- TPM2 ESAPI is probed at runtime for capabilities; `hardwareBackedRequired` fails closed until TPM-resident keys exist.
+- Private keys: Dart `LinuxDesktopKeyManager` with FSS1 records, standards PKCS#8 PBES2 export/import, PKCS#10 CSR.
+- DEK wrap via Secret Service, systemd-creds, or protected-file.
+- TPM2-resident keys via optional `tpm2-tools` when `hardwareBackedRequired` / preferred; otherwise fail closed.
 
 ## Desktop private-key API
 

@@ -72,6 +72,7 @@ void main() {
       ),
     );
     expect(utf8Contains(exported.bytes, 'ENCRYPTED PRIVATE KEY'), isTrue);
+    expect(utf8Contains(exported.bytes, 'FSS-EPK1'), isFalse);
 
     final locked = await manager.createPrivateKey(
       DesktopPrivateKeyOptions(

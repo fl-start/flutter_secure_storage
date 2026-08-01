@@ -1,3 +1,9 @@
+## 0.4.0
+
+* Enabled private-key APIs on **iOS** and macOS (Secure Enclave / Keychain) via the shared `desktop_keys` channel.
+* Added `importPrivateKey` (FSS-EPK1) and fixed software-key signing to use `SecKeyCreateSignature`.
+* Simulator reports Secure Enclave unavailable (honest capabilities).
+
 ## 0.3.0
 
 * Added macOS-only `DesktopPrivateKeyManager` (Secure Enclave / Keychain) behind `#if os(macOS)`.

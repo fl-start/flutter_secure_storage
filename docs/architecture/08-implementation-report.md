@@ -97,6 +97,10 @@ See CI / local test run summary in the PR. Expected:
 ## Known follow-ups
 
 - Full NCrypt-persisted non-exportable TPM private keys on Windows
-- macOS migration from FSS-EPK1 / FSS-CSR1 to standards PKCS#8 / PKCS#10
+- Apple/Android migration from FSS-EPK1 / FSS-CSR1 to standards PKCS#8 / PKCS#10
 - Direct ESAPI (no tpm2-tools) private-key path on Linux
-- Sync `develop` with `main` release history
+
+## Explicitly cancelled
+
+- Syncing `develop` with `main` — **never**; `develop` is frozen forever (see `SYNC.md`)
+- Web private-key or product support — **out of scope**

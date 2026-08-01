@@ -1,6 +1,6 @@
 name: flutter_secure_storage_windows
 description: Windows implementation of flutter_secure_storage. Please use flutter_secure_storage instead of this package.
-repository: https://github.com/fl-start/flutter_secure_storage/tree/develop/flutter_secure_storage_windows
+repository: https://github.com/fl-start/flutter_secure_storage/tree/main/flutter_secure_storage_windows
 version: 5.1.0
 
 environment:

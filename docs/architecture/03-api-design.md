@@ -1,4 +1,7 @@
-# Desktop private-key API design
+# Unified private-key API design
+
+Canonical facade: `SecurePrivateKeyStorage` (typedef `DesktopSecureStorage` for compatibility).  
+Channel (historical name): `plugins.it_nomads.com/flutter_secure_storage/desktop_keys`.
 
 ## Principles
 
@@ -6,7 +9,7 @@
 - Opaque handles: never return raw private-key bytes except via encrypted export.
 - Policy at creation time: protection + export policy are immutable.
 - Accurate capabilities: separate private-key hardware from storage wrapping hardware.
-- Desktop-only: mobile platforms throw `unsupportedPlatform` for these APIs.
+- Supported on Android, iOS, Windows, macOS, Linux. **Web is unsupported** (`unsupportedPlatform`).
 
 ## Enums
 

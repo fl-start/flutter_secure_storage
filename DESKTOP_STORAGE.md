@@ -1,23 +1,28 @@
-# Desktop secure storage (fl-start fork)
+# Secure storage (fl-start fork)
 
-This document describes how `flutter_secure_storage` behaves on **Windows**, **macOS**, and **Linux**, including the v11 desktop private-key API.
+This document describes how `flutter_secure_storage` behaves on **supported native platforms**, including the unified private-key API.
+
+**Web is not supported** by this fork.
 
 See also:
 
+- [OpenSpec](openspec/project.md)
 - [Architecture](docs/architecture/01-architecture.md)
 - [Threat model](docs/architecture/02-threat-model.md)
 - [API design](docs/architecture/03-api-design.md)
-- [Migration plan](docs/architecture/04-migration-plan.md)
-- [Record format](docs/architecture/05-record-format.md)
 - [Compatibility matrix](docs/architecture/06-compatibility-matrix.md)
+- [Branch policy](SYNC.md)
 
 ## Summary
 
 | Platform | KV backend | Namespace option | Private keys |
 |----------|------------|------------------|--------------|
-| macOS | Keychain (`kSecClassGenericPassword`) | `MacOsOptions.accountName` → `kSecAttrService` | SE / Keychain (`#if os(macOS)` only) |
-| Windows | DPAPI + JSON file (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
-| Linux | Soft-loaded libsecret per-key items + protected-file / systemd-creds fallback | `LinuxOptions.accountName` | FSS1 + PKCS#8/PKCS#10; TPM2 tools for hardware keys |
+| Android | EncryptedSharedPreferences / Keystore wrap | `AndroidOptions` | Android Keystore / StrongBox + software exportable |
+| iOS | Keychain (+ optional SE wrap) | `IOSOptions.accountName` | Secure Enclave / Keychain |
+| macOS | Keychain (+ optional SE wrap) | `MacOsOptions.accountName` | Secure Enclave / Keychain |
+| Windows | DPAPI + JSON (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
+| Linux | Soft-loaded libsecret + protected-file / systemd-creds | `LinuxOptions.accountName` | FSS1 + PKCS#8/PKCS#10; TPM2 tools |
+| Web | — | — | **Unsupported** |
 
 ## Key-value storage
 
@@ -28,29 +33,33 @@ See also:
 - `useBackwardCompatibility`: migrates legacy Credential Manager / `.secure` (Roaming) into DPAPI JSON.
 - New private-key records prefer **Local AppData**.
 
-### macOS
+### macOS / iOS
 
 - Each Flutter key is a separate Keychain item; optional Secure Enclave envelope for KV (`useSecureEnclave`).
-- **iOS behavior is unchanged.** New private-key code is macOS-gated.
+- Private-key API is available on **both** iOS and macOS via the Darwin package.
 
 ### Linux
 
 - Secret Service via **soft-loaded** libsecret (`dlopen`); builds do not require `libsecret-1-dev`.
 - After upgrade, values migrate from a single JSON secret to **one secret per logical key**.
-- Legacy JSON item is deleted only after every migrated item is verified.
 - Headless / no session bus / missing libsecret: protected-file backend under `$XDG_DATA_HOME/<app>/secure-storage/` (mode `0700`/`0600`).
 - Private keys: Dart `LinuxDesktopKeyManager` with FSS1 records, standards PKCS#8 PBES2 export/import, PKCS#10 CSR.
 - DEK wrap via Secret Service, systemd-creds, or protected-file.
-- TPM2-resident keys via optional `tpm2-tools` when `hardwareBackedRequired` / preferred; otherwise fail closed.
+- TPM2-resident keys via optional `tpm2-tools` when hardware is required/preferred.
 
-## Desktop private-key API
+### Android
+
+- Existing encrypted preferences / Keystore wrapping for KV unchanged.
+- Private keys use a separate Keystore alias namespace (`*.fss.dsk.*`).
+
+## Unified private-key API
 
 ```dart
-import 'package:flutter_secure_storage/desktop/desktop_secure_storage.dart';
+import 'package:flutter_secure_storage/secure_private_key_storage.dart';
 
-final storage = DesktopSecureStorage.privateKeys;
+final storage = SecurePrivateKeyStorage.privateKeys;
+// DesktopSecureStorage is a typedef alias for SecurePrivateKeyStorage.
 
-// Non-exportable admin key
 final handle = await storage.createPrivateKey(
   DesktopPrivateKeyOptions(
     keyId: 'idr.admin.identity',
@@ -61,38 +70,36 @@ final handle = await storage.createPrivateKey(
   ),
 );
 
-// Exportable device key
-final device = await storage.createPrivateKey(
-  DesktopPrivateKeyOptions(
-    keyId: 'idr.device.identity',
-    algorithm: DesktopKeyAlgorithm.ecP256,
-    protection: DesktopSecureStorageProtection.hardwareBackedPreferred,
-    exportPolicy: PrivateKeyExportPolicy.exportableEncrypted,
-  ),
-);
-
 final exported = await storage.exportPrivateKey(
   'idr.device.identity',
   PrivateKeyExportOptions(
     encoding: PrivateKeyEncoding.pemPkcs8,
-    passphrase: exportPassphrase,
+    passphraseBytes: exportPassphraseBytes, // preferred over String
     kdf: PrivateKeyKdf.pbkdf2Sha256,
   ),
 );
-// exported.bytes remain encrypted PKCS#8
 ```
+
+The method channel name `.../desktop_keys` is historical and shared by all native platforms.
 
 ### Export vs hardware
 
 | Situation | `privateKeyHardwareBacked` | `storageProtectionHardwareBacked` | exportable |
 |-----------|----------------------------|-----------------------------------|------------|
-| SE/TPM-resident signing key | true | true | false |
-| Software key, SE/TPM wrap | false | true | true |
-| DPAPI / Keychain / Secret Service only | false | false | policy-dependent |
+| SE/TPM/Keystore-resident signing key | true | true | false |
+| Software key, SE/TPM/Keystore wrap | false | true | true |
+| Software / DPAPI / Keychain / Secret Service only | false | false | policy-dependent |
 
 ### Passphrases
 
 Prefer `passphraseBytes` (`Uint8List`). Dart `String` passphrases cannot be reliably wiped from memory.
+
+### Format notes
+
+| Platform | Export / CSR |
+|----------|----------------|
+| Linux / Windows | PKCS#8 PBES2 + PKCS#10 (via `DesktopCrypto`) |
+| Android / iOS / macOS | FSS-EPK1 encrypted export + FSS-CSR1 (Apple/Android channel path) |
 
 ## Threat model (short)
 
@@ -103,6 +110,7 @@ Prefer `passphraseBytes` (`Uint8List`). Dart `String` passphrases cannot be reli
 
 ## fl-start releases
 
-- Package version **11.0.0**
-- Immutable production tag: `desktop-secure-storage-v11.0.0` on `main`
-- Optional pin: `v11.0.0-fl.1` (see `SYNC.md`)
+- Package version **11.0.4**
+- Immutable production tag: `desktop-secure-storage-v11.0.4` on `main`
+- Optional pin: `v11.0.4-fl.1` (see `SYNC.md`)
+- `develop` is never synced with `main`

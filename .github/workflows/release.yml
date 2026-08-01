@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'desktop-secure-storage-v*'
+      - 'v*-fl.*'
+
+permissions:
+  contents: write
+
+jobs:
+  github_release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            fl-start `flutter_secure_storage` release from `main`.
+
+            ## Consume via Git
+
+            ```yaml
+            dependencies:
+              flutter_secure_storage:
+                git:
+                  url: https://github.com/fl-start/flutter_secure_storage.git
+                  ref: ${{ github.ref_name }}
+                  path: flutter_secure_storage
+            ```
+
+            See `README_FL_START.md`, `DESKTOP_STORAGE.md`, and `openspec/`.
+            Web is not supported. `develop` is never synced with `main`.

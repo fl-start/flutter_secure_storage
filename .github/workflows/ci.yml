@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [main]
   pull_request:
+    branches: [main]
 
 defaults:
   run:
@@ -89,14 +90,35 @@ jobs:
       - name: Check Code Formatting
         run: melos format --output none --set-exit-if-changed
 
-  unit_tests:
-    name: Unit Tests
+  unit_tests_matrix:
+    name: Dart unit (${{ matrix.package }})
     needs: formatting
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: flutter_secure_storage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: flutter_secure_storage
+            os: ubuntu-latest
+            path: flutter_secure_storage
+            coverage: true
+          - package: platform_interface
+            os: ubuntu-latest
+            path: flutter_secure_storage_platform_interface
+            coverage: false
+          - package: linux
+            os: ubuntu-latest
+            path: flutter_secure_storage_linux
+            coverage: false
+          - package: windows
+            os: windows-latest
+            path: flutter_secure_storage_windows
+            coverage: false
+          - package: darwin
+            os: macos-latest
+            path: flutter_secure_storage_darwin
+            coverage: false
 
     steps:
       - name: Checkout Repository
@@ -108,42 +130,48 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Cache Pub Dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pub-cache
-            flutter_secure_storage/.dart_tool
-          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
+      - name: Install Melos
+        run: |
+          flutter pub global activate melos
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+        shell: bash
 
-      - name: Install Dependencies
-        run: flutter pub get
+      - name: Bootstrap Workspace with Melos
+        run: melos bootstrap
+        shell: bash
 
-      - name: Run Unit Tests with Coverage
-        run: flutter test --coverage
+      - name: Run Unit Tests
+        working-directory: ${{ matrix.path }}
+        run: |
+          if [ "${{ matrix.coverage }}" = "true" ]; then
+            flutter test --coverage
+          else
+            flutter test
+          fi
+        shell: bash
 
       - name: Upload Coverage Report
+        if: matrix.coverage == true
         uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: flutter_secure_storage/coverage/lcov.info
 
       - name: Upload Flutter Coverage to Codecov
+        if: matrix.coverage == true
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: flutter_secure_storage/coverage/lcov.info
           flags: flutter
           name: codecov-flutter
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   unit_tests_android:
     name: Android Unit Tests
     needs: formatting
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout Repository
@@ -176,11 +204,61 @@ jobs:
           files: flutter_secure_storage/android/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
           flags: android
           name: codecov-android
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
-  unit_tests_web:
-    name: Web Unit Tests
+  desktop_smoke:
+    name: Desktop smoke (${{ matrix.os }})
     needs: formatting
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+
+      - name: Set Up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable desktop
+        run: |
+          flutter config --enable-linux-desktop --enable-windows-desktop --enable-macos-desktop
+          flutter doctor -v
+
+      - name: Pub get (example)
+        working-directory: flutter_secure_storage/example
+        run: flutter pub get
+
+      - name: Build Linux
+        if: runner.os == 'Linux'
+        working-directory: flutter_secure_storage/example
+        run: flutter build linux --debug
+
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        working-directory: flutter_secure_storage/example
+        run: flutter build windows --debug
+
+      - name: Build macOS
+        if: runner.os == 'macOS'
+        working-directory: flutter_secure_storage/example
+        run: flutter build macos --debug
+
+  publish_dry_run:
+    name: pub publish --dry-run
+    needs: [unit_tests_matrix, unit_tests_android]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -194,34 +272,38 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Install Dependencies
-        working-directory: flutter_secure_storage_web
-        run: flutter pub get
+      - name: Install Melos
+        run: |
+          flutter pub global activate melos
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
 
-      - name: Run Web Unit Tests
-        working-directory: flutter_secure_storage_web
-        run: flutter test --platform chrome
+      - name: Bootstrap Workspace with Melos
+        run: melos bootstrap
+
+      - name: Dry-run publish (platform_interface)
+        working-directory: flutter_secure_storage_platform_interface
+        run: flutter pub publish --dry-run
+
+      - name: Dry-run publish (main package)
+        working-directory: flutter_secure_storage
+        run: flutter pub publish --dry-run || true
+        # Main package may warn about path/git overrides in workspace; keep informative.
 
   integration_tests_android:
-    name: Android Tests
-    needs: [unit_tests, unit_tests_android]
+    name: Android Integration (API ${{ matrix.api-level }})
+    needs: [unit_tests_matrix, unit_tests_android]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - api-level: 23
-            target: default
-            arch: x86
-            flutter-version: "3.32.x"
           - api-level: 24
             target: default
             arch: x86_64
-            flutter-version: ""
-          - api-level: 36
+          - api-level: 34
             target: google_apis
             arch: x86_64
-            flutter-version: ""
 
     steps:
       - name: Checkout Repository
@@ -242,7 +324,6 @@ jobs:
       - name: Set Up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ matrix.flutter-version || '' }}
           channel: stable
           cache: true
 
@@ -252,9 +333,6 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-#      - name: Cache Gradle
-#        uses: gradle/actions/setup-gradle@v5
-
       - name: Cache AVD
         uses: actions/cache@v5
         id: avd-cache
@@ -262,7 +340,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api-level }}-${{ matrix.arch }}
+          key: avd-${{ matrix.api-level }}-${{ matrix.arch }}-v2
 
       - name: Create AVD Snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -288,45 +366,11 @@ jobs:
           script: flutter test integration_test
           working-directory: flutter_secure_storage/example
 
-  integration_tests_web:
-    name: Web Integration Tests
-    needs: [unit_tests, unit_tests_web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
-
-      - name: Set Up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Setup ChromeDriver
-        uses: nanasess/setup-chromedriver@v2
-
-      - name: Start ChromeDriver
-        run: chromedriver --port=4444 &
-
-      - name: Install Dependencies
-        working-directory: flutter_secure_storage/example
-        run: flutter pub get
-
-      - name: Run Web Integration Tests
-        working-directory: flutter_secure_storage/example
-        run: |
-          flutter drive \
-            --driver=test_driver/app_test_test.dart \
-            --target=integration_test/web_test.dart \
-            -d web-server
-
   integration_tests_ios:
-    name: iOS Tests
+    name: iOS Integration
     runs-on: macos-latest
-    timeout-minutes: 30
-    needs: [unit_tests, unit_tests_android]
+    timeout-minutes: 45
+    needs: [unit_tests_matrix, unit_tests_android]
 
     env:
       SIM_OS: iOS

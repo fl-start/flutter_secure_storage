@@ -1,4 +1,10 @@
-# flutter_secure_storage
+# flutter_secure_storage (fl-start fork)
+
+> **fl-start production lives on [`main`](https://github.com/fl-start/flutter_secure_storage).**  
+> See [README_FL_START.md](README_FL_START.md), [SYNC.md](SYNC.md), and [openspec/](openspec/).  
+> **Web is not supported.** Unified private-key API: `SecurePrivateKeyStorage` (Android, iOS, Windows, macOS, Linux).  
+> Prefer Git tags (`desktop-secure-storage-v11.0.4`) until/unless published to pub.dev.  
+> The `develop` branch is frozen forever and is never synced with `main`.
 
 [![Pub Version](https://img.shields.io/pub/v/flutter_secure_storage.svg)](https://pub.dev/packages/flutter_secure_storage)
 [![Pub Version Prerelease](https://img.shields.io/pub/v/flutter_secure_storage.svg?include_prereleases)](https://pub.dev/packages/flutter_secure_storage)

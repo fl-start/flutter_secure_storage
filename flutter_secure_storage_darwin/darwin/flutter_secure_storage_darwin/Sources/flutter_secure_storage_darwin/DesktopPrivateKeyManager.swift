@@ -3,16 +3,14 @@ import Security
 import CryptoKit
 import LocalAuthentication
 
-#if os(macOS)
 import CommonCrypto
+#if os(iOS)
+import Flutter
+#else
 import FlutterMacOS
 #endif
 
-#if os(macOS)
-
-/// macOS-only desktop private-key manager.
-///
-/// iOS builds compile this file but all types are gated so iOS behavior is unchanged.
+/// Apple platforms private-key manager (iOS Secure Enclave / Keychain, macOS SE / Keychain).
 enum DesktopPrivateKeyError: String {
     case providerUnavailable
     case hardwareRequiredButUnavailable
@@ -99,7 +97,11 @@ final class DesktopPrivateKeyManager {
         if seAvailable { providers.append("secure_enclave") }
 
         return [
+            #if os(iOS)
+            "platform": "ios",
+#else
             "platform": "macos",
+#endif
             "availableProviders": providers,
             "selectedProvider": selected,
             "hardwareAvailable": seAvailable,
@@ -131,7 +133,7 @@ final class DesktopPrivateKeyManager {
         let requireUserPresence = args["requireUserPresence"] as? Bool ?? false
         let machineScoped = args["machineScoped"] as? Bool ?? false
         if machineScoped {
-            throw makeError(.invalidConfiguration, "machineScoped is not supported on macOS private keys")
+            throw makeError(.invalidConfiguration, "machineScoped is not supported on Apple private keys")
         }
         if algorithm == "ed25519" && protection == "hardwareBackedRequired" {
             throw makeError(.algorithmUnsupported, "ed25519 is not supported by Secure Enclave")
@@ -223,6 +225,103 @@ final class DesktopPrivateKeyManager {
         ]
     }
 
+    func importPrivateKey(args: [String: Any], encryptedKey: Data) throws -> [String: Any] {
+        guard let keyId = args["keyId"] as? String, !keyId.isEmpty else {
+            throw makeError(.invalidConfiguration, "keyId required")
+        }
+        if keyId.contains("..") || keyId.contains("\\") {
+            throw makeError(.invalidConfiguration, "unsafe keyId")
+        }
+        if getHandle(keyId: keyId) != nil {
+            throw makeError(.keyAlreadyExists, "private key already exists")
+        }
+        if args["machineScoped"] as? Bool == true {
+            throw makeError(.invalidConfiguration, "machineScoped is not supported on Apple private keys")
+        }
+        var passphrase = args["passphrase"] as? String ?? ""
+        if passphrase.isEmpty, let bytes = (args["passphraseBytes"] as? FlutterStandardTypedData)?.data {
+            passphrase = String(data: bytes, encoding: .utf8) ?? ""
+        }
+        guard !passphrase.isEmpty else {
+            throw makeError(.invalidExportPassphrase, "import passphrase must be non-empty")
+        }
+
+        var blob = encryptedKey
+        if let pem = String(data: encryptedKey, encoding: .utf8),
+           pem.contains("BEGIN ENCRYPTED PRIVATE KEY") {
+            let body = pem
+                .replacingOccurrences(of: "-----BEGIN ENCRYPTED PRIVATE KEY-----", with: "")
+                .replacingOccurrences(of: "-----END ENCRYPTED PRIVATE KEY-----", with: "")
+                .filter { !$0.isWhitespace }
+            guard let decoded = Data(base64Encoded: body) else {
+                throw makeError(.corruptRecord, "invalid PEM")
+            }
+            blob = decoded
+        }
+
+        let privateData = try decryptPkcs8(encrypted: blob, passphrase: passphrase)
+        defer { zeroData(privateData) }
+
+        let algorithm = args["algorithm"] as? String ?? inferAlgorithm(privateData: privateData)
+        let exportPolicy = args["exportPolicy"] as? String ?? "exportableEncrypted"
+        let requireUserPresence = args["requireUserPresence"] as? Bool ?? false
+        let protection = args["protection"] as? String ?? "platformDefault"
+        let wrapWithSE = isSecureEnclaveAvailable()
+            && (protection == "hardwareBackedPreferred" || protection == "hardwareBackedRequired" || protection == "platformDefault")
+
+        let attrs: [CFString: Any] = [
+            kSecAttrKeyType: algorithm.hasPrefix("rsa") ? kSecAttrKeyTypeRSA : kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits: algorithm == "rsa3072" ? 3072 : (algorithm == "rsa2048" ? 2048 : 256)
+        ]
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateWithData(privateData as CFData, attrs as CFDictionary, &error),
+              let publicKey = SecKeyCopyPublicKey(privateKey),
+              let publicData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
+            throw makeError(.corruptRecord, error?.takeRetainedValue().localizedDescription ?? "import parse failed")
+        }
+
+        let aesKey = SymmetricKey(size: .bits256)
+        let nonce = AES.GCM.Nonce()
+        let sealed = try AES.GCM.seal(privateData, using: aesKey, nonce: nonce)
+        let sealedBlob = Data(nonce) + sealed.ciphertext + sealed.tag
+        storeKeychainData(account: privateAccount(keyId), data: sealedBlob, synchronizable: false)
+
+        let aesRaw = aesKey.withUnsafeBytes { Data($0) }
+        defer { zeroData(aesRaw) }
+        var storageHw = false
+        if wrapWithSE {
+            let wrapTag = Data("fss.dsk.wrap.\(keyId)".utf8)
+            let wrapKey = try ensureWrapEnclaveKey(tag: wrapTag)
+            guard let publicWrap = SecKeyCopyPublicKey(wrapKey) else {
+                throw makeError(.providerUnavailable, "wrap public key missing")
+            }
+            let wrapAlgorithm = SecKeyAlgorithm.eciesEncryptionCofactorX963SHA256AESGCM
+            guard let wrapped = SecKeyCreateEncryptedData(publicWrap, wrapAlgorithm, aesRaw as CFData, &error) as Data? else {
+                throw makeError(.accessDenied, error?.takeRetainedValue().localizedDescription ?? "wrap failed")
+            }
+            storeKeychainData(account: wrapAccount(keyId), data: wrapped, synchronizable: false)
+            storageHw = true
+        } else {
+            storeKeychainData(account: wrapAccount(keyId), data: aesRaw, synchronizable: false)
+        }
+        storeKeychainData(account: publicAccount(keyId), data: publicData, synchronizable: false)
+
+        let handle = DesktopPrivateKeyHandleDTO(
+            keyId: keyId,
+            provider: storageHw ? "secure_enclave_wrap" : "keychain",
+            algorithm: algorithm,
+            exportPolicy: exportPolicy,
+            hardwareBacked: false,
+            storageProtectionHardwareBacked: storageHw,
+            deviceBound: true,
+            machineScoped: false,
+            userPresenceRequired: requireUserPresence
+        )
+        storeHandle(handle)
+        return ["handle": handle.toMap()]
+    }
+
     func sign(keyId: String, data: Data) throws -> Data {
         guard let handle = getHandle(keyId: keyId) else {
             throw makeError(.keyNotFound, "private key not found")
@@ -246,8 +345,36 @@ final class DesktopPrivateKeyManager {
             throw makeError(.keyUnwrapFailed, "unable to unwrap private key")
         }
         defer { zeroData(privateData) }
-        let digest = SHA256.hash(data: privateData + data)
-        return Data(digest)
+        let keyType: CFString
+        let keySize: Int
+        let algorithm: SecKeyAlgorithm
+        switch handle.algorithm {
+        case "rsa2048":
+            keyType = kSecAttrKeyTypeRSA
+            keySize = 2048
+            algorithm = .rsaSignatureMessagePKCS1v15SHA256
+        case "rsa3072":
+            keyType = kSecAttrKeyTypeRSA
+            keySize = 3072
+            algorithm = .rsaSignatureMessagePKCS1v15SHA256
+        default:
+            keyType = kSecAttrKeyTypeECSECPrimeRandom
+            keySize = 256
+            algorithm = .ecdsaSignatureMessageX962SHA256
+        }
+        let attrs: [CFString: Any] = [
+            kSecAttrKeyType: keyType,
+            kSecAttrKeyClass: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits: keySize
+        ]
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateWithData(privateData as CFData, attrs as CFDictionary, &error) else {
+            throw makeError(.keyUnwrapFailed, error?.takeRetainedValue().localizedDescription ?? "private key parse failed")
+        }
+        guard let signature = SecKeyCreateSignature(privateKey, algorithm, data as CFData, &error) as Data? else {
+            throw makeError(.accessDenied, error?.takeRetainedValue().localizedDescription ?? "sign failed")
+        }
+        return signature
     }
 
     func getPublicKey(keyId: String) throws -> Data {
@@ -389,11 +516,11 @@ final class DesktopPrivateKeyManager {
     // MARK: - keychain / SE helpers
 
     private func isSecureEnclaveAvailable() -> Bool {
-        if #available(macOS 10.15, *) {
-            // Probe by attempting attribute construction; machines without SE fail at create time.
-            return true
-        }
+        #if targetEnvironment(simulator)
         return false
+        #else
+        return true
+        #endif
     }
 
     private func seTag(_ keyId: String) -> Data {
@@ -567,31 +694,9 @@ final class DesktopPrivateKeyManager {
     private func encryptPkcs8(privateData: Data, passphrase: String) throws -> Data {
         let salt = randomBytes(16)
         let nonce = AES.GCM.Nonce()
-        let passphraseData = Data(passphrase.utf8)
-        // PBKDF2-HMAC-SHA256
-        var derived = Data(count: 32)
-        let status = derived.withUnsafeMutableBytes { derivedPtr in
-            passphraseData.withUnsafeBytes { passPtr in
-                salt.withUnsafeBytes { saltPtr in
-                    CCKeyDerivationPBKDF(
-                        CCPBKDFAlgorithm(kCCPBKDF2),
-                        passPtr.bindMemory(to: Int8.self).baseAddress,
-                        passphraseData.count,
-                        saltPtr.bindMemory(to: UInt8.self).baseAddress,
-                        salt.count,
-                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                        100000,
-                        derivedPtr.bindMemory(to: UInt8.self).baseAddress,
-                        32
-                    )
-                }
-            }
-        }
-        guard status == kCCSuccess else {
-            throw makeError(.invalidConfiguration, "PBKDF2 failed")
-        }
-        let key = SymmetricKey(data: derived)
+        let derived = try pbkdf2(passphrase: passphrase, salt: salt, iterations: 100000)
         defer { zeroData(derived) }
+        let key = SymmetricKey(data: derived)
         let sealed = try AES.GCM.seal(privateData, using: key, nonce: nonce)
         var out = Data("FSS-EPK1".utf8)
         out.append(u32(100000))
@@ -605,6 +710,67 @@ final class DesktopPrivateKeyManager {
         out.append(u32(UInt32(sealed.ciphertext.count)))
         out.append(sealed.ciphertext)
         return out
+    }
+
+    private func decryptPkcs8(encrypted: Data, passphrase: String) throws -> Data {
+        guard encrypted.count > 8 + 4 + 1, String(data: encrypted.prefix(8), encoding: .utf8) == "FSS-EPK1" else {
+            throw makeError(.corruptRecord, "not FSS-EPK1")
+        }
+        var idx = encrypted.startIndex.advanced(by: 8)
+        let iters = encrypted[idx..<idx.advanced(by: 4)].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+        idx = idx.advanced(by: 4)
+        let saltLen = Int(encrypted[idx]); idx = idx.advanced(by: 1)
+        let salt = encrypted[idx..<idx.advanced(by: saltLen)]; idx = idx.advanced(by: saltLen)
+        let nonceLen = Int(encrypted[idx]); idx = idx.advanced(by: 1)
+        let nonceData = encrypted[idx..<idx.advanced(by: nonceLen)]; idx = idx.advanced(by: nonceLen)
+        let tagLen = Int(encrypted[idx]); idx = idx.advanced(by: 1)
+        let tag = encrypted[idx..<idx.advanced(by: tagLen)]; idx = idx.advanced(by: tagLen)
+        let ctLen = Int(encrypted[idx..<idx.advanced(by: 4)].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian })
+        idx = idx.advanced(by: 4)
+        let ct = encrypted[idx..<idx.advanced(by: ctLen)]
+
+        let derived = try pbkdf2(passphrase: passphrase, salt: Data(salt), iterations: Int(iters))
+        defer { zeroData(derived) }
+        let key = SymmetricKey(data: derived)
+        let box = try AES.GCM.SealedBox(
+            nonce: AES.GCM.Nonce(data: Data(nonceData)),
+            ciphertext: Data(ct),
+            tag: Data(tag)
+        )
+        return try AES.GCM.open(box, using: key)
+    }
+
+    private func pbkdf2(passphrase: String, salt: Data, iterations: Int) throws -> Data {
+        let passphraseData = Data(passphrase.utf8)
+        var derived = Data(count: 32)
+        let status = derived.withUnsafeMutableBytes { derivedPtr in
+            passphraseData.withUnsafeBytes { passPtr in
+                salt.withUnsafeBytes { saltPtr in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        passPtr.bindMemory(to: Int8.self).baseAddress,
+                        passphraseData.count,
+                        saltPtr.bindMemory(to: UInt8.self).baseAddress,
+                        salt.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        UInt32(iterations),
+                        derivedPtr.bindMemory(to: UInt8.self).baseAddress,
+                        32
+                    )
+                }
+            }
+        }
+        guard status == kCCSuccess else {
+            throw makeError(.invalidConfiguration, "PBKDF2 failed")
+        }
+        return derived
+    }
+
+    private func inferAlgorithm(privateData: Data) -> String {
+        if privateData.count > 500 {
+            return privateData.count > 1200 ? "rsa3072" : "rsa2048"
+        }
+        return "ecP256"
     }
 
     // MARK: - meta
@@ -674,12 +840,3 @@ final class DesktopPrivateKeyManager {
         mutable.resetBytes(in: 0..<mutable.count)
     }
 }
-
-#else
-
-/// iOS placeholder — desktop private-key APIs are unavailable.
-enum DesktopPrivateKeyManagerUnavailable {
-    static let reason = "desktop private keys are macOS-only"
-}
-
-#endif

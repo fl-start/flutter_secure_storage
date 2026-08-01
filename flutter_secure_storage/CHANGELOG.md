@@ -1,3 +1,14 @@
+## 11.0.4
+
+### Unified private-key API + mobile (fl-start)
+- Added `SecurePrivateKeyStorage` as the canonical private-key facade (Android, iOS, Windows, macOS, Linux).
+- `DesktopSecureStorage` is a compatibility typedef for `SecurePrivateKeyStorage`.
+- Android: Android Keystore / StrongBox private-key manager on the shared `desktop_keys` channel.
+- iOS: Secure Enclave / Keychain private-key APIs enabled (shared Darwin implementation with macOS).
+- **Web is unsupported** (removed from declared platforms; private-key APIs throw `unsupportedPlatform`).
+- Docs: OpenSpec under `openspec/`, frozen `develop` policy in `SYNC.md`, compatibility matrix updated.
+- Depends on `flutter_secure_storage_darwin` ^0.4.0 and `platform_interface` ^2.3.0.
+
 ## 11.0.3
 
 ### Linux completeness (fl-start)

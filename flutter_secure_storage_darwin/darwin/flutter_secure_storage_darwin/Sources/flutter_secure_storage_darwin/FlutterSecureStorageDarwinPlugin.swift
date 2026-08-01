@@ -31,15 +31,13 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         registrar.addApplicationDelegate(instance)
         eventChannel.setStreamHandler(instance)
 
-        #if os(macOS)
-        let desktopChannel = FlutterMethodChannel(
+        let privateKeysChannel = FlutterMethodChannel(
             name: "plugins.it_nomads.com/flutter_secure_storage/desktop_keys",
             binaryMessenger: messenger
         )
-        desktopChannel.setMethodCallHandler { call, result in
-            instance.handleDesktopKeys(call, result: result)
+        privateKeysChannel.setMethodCallHandler { call, result in
+            instance.handlePrivateKeys(call, result: result)
         }
-        #endif
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -81,8 +79,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         }
     }
 
-    #if os(macOS)
-    fileprivate func handleDesktopKeys(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    fileprivate func handlePrivateKeys(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         serialExecutionQueue.async {
             do {
                 let args = call.arguments as? [String: Any] ?? [:]
@@ -110,13 +107,20 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
                     DispatchQueue.main.async { result(nil) }
                 case "exportPrivateKey":
                     let keyId = args["keyId"] as? String ?? ""
-                    let passphrase = args["passphrase"] as? String ?? ""
+                    var passphrase = args["passphrase"] as? String ?? ""
+                    if passphrase.isEmpty, let bytes = (args["passphraseBytes"] as? FlutterStandardTypedData)?.data {
+                        passphrase = String(data: bytes, encoding: .utf8) ?? ""
+                    }
                     let encoding = args["encoding"] as? String ?? "pemPkcs8"
                     let value = try DesktopPrivateKeyManager.shared.exportPrivateKey(
                         keyId: keyId,
                         passphrase: passphrase,
                         encoding: encoding
                     )
+                    DispatchQueue.main.async { result(value) }
+                case "importPrivateKey":
+                    let encrypted = (args["encryptedKey"] as? FlutterStandardTypedData)?.data ?? Data()
+                    let value = try DesktopPrivateKeyManager.shared.importPrivateKey(args: args, encryptedKey: encrypted)
                     DispatchQueue.main.async { result(value) }
                 case "sign":
                     let keyId = args["keyId"] as? String ?? ""
@@ -144,15 +148,19 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             } catch {
                 let nsError = error as NSError
                 let code = nsError.userInfo["code"] as? String ?? "unknown"
+                #if os(iOS)
+                let provider = "ios"
+                #else
+                let provider = "macos"
+                #endif
                 DispatchQueue.main.async {
                     result(FlutterError(code: code, message: nsError.localizedDescription, details: [
-                        "provider": "macos"
+                        "provider": provider
                     ]))
                 }
             }
         }
     }
-    #endif
 
     public func onListen(withArguments arguments: Any?,
                          eventSink: @escaping FlutterEventSink) -> FlutterError? {

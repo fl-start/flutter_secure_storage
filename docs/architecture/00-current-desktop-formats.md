@@ -1,6 +1,8 @@
 # Current desktop storage formats (baseline)
 
-Inspection baseline for `feature/desktop-hardware-backed-storage`, derived from `develop` at the branch cut.
+Historical inspection baseline from the original desktop feature branch cut.
+**Current product state is documented in `DESKTOP_STORAGE.md`, `06-compatibility-matrix.md`, and `openspec/`.**
+`develop` is frozen and is not a source of truth for production.
 
 ## Package versions (pre-change)
 

@@ -13,6 +13,8 @@ import java.io.StringWriter;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.it_nomads.fluttersecurestorage.privatekeys.AndroidPrivateKeyManager;
+
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
@@ -24,6 +26,8 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
 
     private static final String TAG = "FlutterSecureStoragePlugin";
     private MethodChannel channel;
+    private MethodChannel privateKeysChannel;
+    private AndroidPrivateKeyManager privateKeyManager;
     private Context applicationContext;
     private final Map<String, FlutterSecureStorage> storagesBySharedPreferencesName = new HashMap<>();
     private HandlerThread workerThread;
@@ -39,6 +43,15 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
 
             channel = new MethodChannel(messenger, "plugins.it_nomads.com/flutter_secure_storage");
             channel.setMethodCallHandler(this);
+
+            privateKeyManager = new AndroidPrivateKeyManager(applicationContext);
+            privateKeysChannel = new MethodChannel(
+                    messenger,
+                    "plugins.it_nomads.com/flutter_secure_storage/desktop_keys"
+            );
+            privateKeysChannel.setMethodCallHandler((call, result) ->
+                    workerThreadHandler.post(() -> privateKeyManager.onMethodCall(call, new MethodResultWrapper(result)))
+            );
         } catch (Exception e) {
             Log.e(TAG, "Registration failed", e);
         }
@@ -51,6 +64,11 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
 
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+        if (privateKeysChannel != null) {
+            privateKeysChannel.setMethodCallHandler(null);
+            privateKeysChannel = null;
+        }
+        privateKeyManager = null;
         if (channel != null) {
             workerThread.quitSafely();
             workerThread = null;

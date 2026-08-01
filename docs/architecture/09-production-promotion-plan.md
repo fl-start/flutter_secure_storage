@@ -4,23 +4,22 @@
 
 | Branch | Role |
 |--------|------|
-| `develop` | Ongoing integration (unchanged; never rewritten) |
-| `feature/desktop-hardware-backed-storage` | Implementation branch |
-| `main` | Production / release branch |
+| `main` | **Only** production / release branch |
+| `develop` | Frozen forever; **MUST NEVER** be synced with `main` (see `SYNC.md`) |
 
-Do **not** create `master` if `main` is used. Do not delete `develop`.
+Do **not** merge `develop` ↔ `main` in either direction. Do not delete `develop`.
 
 ## Steps
 
-1. Open PR: `feature/desktop-hardware-backed-storage` → `develop`.
-2. Require green CI (`CI` + `Desktop Smoke`).
-3. Merge into `develop` when approved (no auto-merge unless policy allows).
-4. Create / update `main` from the tested release commit on `develop`.
-5. Open PR: `develop` → `main` for formal promotion (or fast-forward `main` to the release commit after approval).
-6. After approval and green checks on `main`, create **immutable** tag:
+1. Land changes on `main` via PR (or direct push when intentional).
+2. Require green CI on `main`.
+3. Bump versions + changelogs.
+4. Create **immutable** tags on the release commit:
    ```bash
-   git tag -a desktop-secure-storage-v11.0.0 <main-commit-sha> -m "Desktop secure storage 11.0.0"
-   git push origin desktop-secure-storage-v11.0.0
+   git tag -a desktop-secure-storage-v11.0.4 <main-commit-sha> -m "Secure storage 11.0.4"
+   git tag -a v11.0.4-fl.1 <main-commit-sha> -m "fl-start pin 11.0.4"
+   git push origin desktop-secure-storage-v11.0.4 v11.0.4-fl.1
    ```
-7. Optional fl-start pin tag: `v11.0.0-fl.1` pointing at the same commit.
-8. Never move or overwrite `desktop-secure-storage-v11.0.0`.
+5. Publish a GitHub Release for the product tag.
+6. Consumers pin the Git tag until/unless pub.dev publish is performed.
+7. Never move or overwrite an existing `desktop-secure-storage-vX.Y.Z` tag.

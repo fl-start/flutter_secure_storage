@@ -24,7 +24,7 @@ class DesktopSecureStorageCapabilities {
     this.rootCompromiseResistant = false,
   });
 
-  /// Platform id: `windows`, `macos`, or `linux`.
+  /// Platform id: `android`, `ios`, `windows`, `macos`, or `linux`.
   final String platform;
 
   /// Providers discovered at runtime.

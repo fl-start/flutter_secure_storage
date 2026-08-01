@@ -1,3 +1,8 @@
+## 2.3.0
+
+* Documented private-key manager as multi-platform (Android / iOS / desktop); Web unsupported.
+* Capabilities `platform` may be `android` or `ios` in addition to desktop ids.
+
 ## 2.2.0
 
 * Added `DesktopCrypto` helpers: PKCS#8 PBES2 (AES-256-CBC) export/import, PKCS#10 CSR, real ECDSA/RSA sign, legacy FSS blob dual-read.

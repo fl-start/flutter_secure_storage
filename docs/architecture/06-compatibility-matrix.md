@@ -1,39 +1,39 @@
 # Compatibility matrix
 
-## Desktop platforms
+## Supported platforms
 
-| Capability | Windows | macOS | Linux |
-|------------|---------|-------|-------|
-| Existing KV API | Yes (DPAPI JSON + legacy CredMan) | Yes (Keychain) | Yes (libsecret JSON → per-item; protected-file fallback) |
-| FSS1 versioned records | Private keys | Private keys | Private keys (+ protected-file KV) |
-| Hardware preferred fallback | TPM → DPAPI | SE → Keychain | TPM2 tools → SS/systemd-creds → file |
-| Hardware required fail-closed | Yes | Yes | Yes (TPM2 tools create/sign when available) |
-| Exportable encrypted PKCS#8 | Yes (PBES2) | Yes (FSS-EPK1) | Yes (PBES2) |
-| Non-exportable refuse export | Yes | Yes | Yes |
-| CSR without export | Yes (PKCS#10) | Yes (FSS-CSR1) | Yes (PKCS#10) |
-| Machine scope | DPAPI LOCAL_MACHINE | Not for private keys | N/A (rejected) |
-| User presence | Limited | Yes (SE / ACL) | No |
-| Headless | Yes | Limited | Protected file (no keyring required) |
-| Build without libsecret/TPM headers | N/A | N/A | Yes (soft dlopen) |
+| Capability | Android | iOS | Windows | macOS | Linux | Web |
+|------------|---------|-----|---------|-------|-------|-----|
+| KV API | Yes | Yes | Yes | Yes | Yes | **Unsupported** |
+| Unified private-key API | Yes (Keystore/StrongBox) | Yes (SE/Keychain) | Yes | Yes (SE/Keychain) | Yes | **Unsupported** |
+| FSS1 versioned records | Meta in prefs | Meta in Keychain | Private keys | Meta in Keychain | Private keys (+ file KV) | — |
+| Hardware preferred fallback | StrongBox → TEE → software | SE → Keychain | TPM probe → DPAPI | SE → Keychain | TPM2 tools → SS/systemd-creds → file | — |
+| Hardware required fail-closed | Yes | Yes | Yes | Yes | Yes | — |
+| Exportable encrypted | FSS-EPK1 | FSS-EPK1 | PKCS#8 PBES2 | FSS-EPK1 | PKCS#8 PBES2 | — |
+| Non-exportable refuse export | Yes | Yes | Yes | Yes | Yes | — |
+| CSR without export | FSS-CSR1 | FSS-CSR1 | PKCS#10 | FSS-CSR1 | PKCS#10 | — |
+| Machine scope | Rejected | Rejected | DPAPI LOCAL_MACHINE | Rejected | Rejected | — |
+| User presence | Yes (Keystore auth) | Yes | Limited | Yes | No | — |
+| Headless | Emulator/CI | Simulator (no SE) | Yes | Limited | Protected file | — |
 
 ## Linux distributions (build / runtime)
 
 | Distro | libsecret | TPM2 (optional) | systemd-creds | Protected file |
 |--------|-----------|-----------------|---------------|----------------|
-| Ubuntu LTS | runtime optional (`libsecret-1-0`) | `libtss2-esys` optional | optional | Yes |
+| Ubuntu LTS | runtime optional | `tpm2-tools` optional | optional | Yes |
 | Debian stable | same | optional | optional | Yes |
-| Fedora | `libsecret` optional | optional | optional | Yes |
+| Fedora | optional | optional | optional | Yes |
 | openSUSE | optional | optional | optional | Yes |
 | Arch | optional | optional | optional | Yes |
 | non-systemd / containers | absent OK | optional | absent | Yes |
 
-TPM is **not** a hard build-time dependency. Plugin builds without TPM headers; runtime probes `libtss2-esys` when present.  
-libsecret is **not** a hard build-time dependency. Plugin builds without `libsecret-1-dev`; runtime `dlopen`s `libsecret-1.so.0` when present.
+libsecret and TPM are **not** hard build-time dependencies (soft `dlopen` / CLI probe).
 
-## Mobile
+## Branch / distribution
 
-| Platform | Changed? |
-|----------|----------|
-| Android | No native changes |
-| iOS | Shared Darwin sources only; new APIs `#if os(macOS)` gated |
-| Web | Untouched |
+| Item | Policy |
+|------|--------|
+| Production branch | `main` |
+| `develop` | Frozen forever; **never** synced with `main` |
+| Primary consume | Git tag `desktop-secure-storage-vX.Y.Z` |
+| pub.dev | Packages kept publish-ready; Git until published |

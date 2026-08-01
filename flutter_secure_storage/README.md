@@ -1,4 +1,7 @@
-# flutter_secure_storage
+# flutter_secure_storage (fl-start fork)
+
+> **fl-start:** production on `main`; **Web unsupported**; private keys via `SecurePrivateKeyStorage`.  
+> Docs: [README_FL_START.md](../README_FL_START.md) · [SYNC.md](../SYNC.md) · [openspec/](../openspec/) · pin `desktop-secure-storage-v11.0.4`.
 
 [![Pub Version](https://img.shields.io/pub/v/flutter_secure_storage.svg)](https://pub.dev/packages/flutter_secure_storage)
 [![Pub Version Prerelease](https://img.shields.io/pub/v/flutter_secure_storage.svg?include_prereleases)](https://pub.dev/packages/flutter_secure_storage)

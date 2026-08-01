@@ -8,7 +8,9 @@ import 'desktop_enums.dart';
 import 'desktop_errors.dart';
 import 'desktop_private_key.dart';
 
-/// Desktop private-key management API (Windows / macOS / Linux only).
+/// Private-key management API (Android / iOS / Windows / macOS / Linux).
+///
+/// Web is unsupported. The method channel name `desktop_keys` is historical.
 abstract class DesktopPrivateKeyManager extends PlatformInterface {
   /// Creates a manager.
   DesktopPrivateKeyManager() : super(token: _token);

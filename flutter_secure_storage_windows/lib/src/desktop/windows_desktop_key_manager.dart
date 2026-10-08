@@ -8,7 +8,6 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter_secure_storage_platform_interface/desktop_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:pointycastle/export.dart';
 import 'package:win32/win32.dart';
 
 /// Windows [DesktopPrivateKeyManager] using DPAPI-wrapped FSS1 records and
@@ -272,7 +271,6 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     meta['keys'] = keys;
     await _saveMeta(meta);
     _zero(pair.privateKeyPkcs8Der);
-    _zero(pair.legacyPrivateBlob);
     return handle;
   }
 
@@ -629,26 +627,17 @@ class _AesGcmBlob {
   final Uint8List ciphertext;
 }
 
-Uint8List _randomBytes(int length) {
-  final rng = Random.secure();
-  return Uint8List.fromList(List<int>.generate(length, (_) => rng.nextInt(256)));
-}
+Uint8List _randomBytes(int length) =>
+    DesktopCryptoBackend.current.randomBytes(length);
 
 _AesGcmBlob _aesGcmEncrypt(Uint8List key, Uint8List plaintext) {
-  assert(key.length == 32, 'AES-256-GCM requires a 32-byte key');
   final nonce = _randomBytes(12);
-  final cipher = GCMBlockCipher(AESEngine())
-    ..init(
-      true,
-      // 128 = authentication tag length in bits (16-byte tag), not key size.
-      AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)),
-    );
-  final out = cipher.process(plaintext);
-  return _AesGcmBlob(
+  final box = DesktopCryptoBackend.current.aes256GcmEncrypt(
+    key: key,
     nonce: nonce,
-    tag: out.sublist(out.length - 16),
-    ciphertext: out.sublist(0, out.length - 16),
+    plaintext: plaintext,
   );
+  return _AesGcmBlob(nonce: nonce, tag: box.tag, ciphertext: box.ciphertext);
 }
 
 Uint8List _aesGcmDecrypt(
@@ -657,15 +646,13 @@ Uint8List _aesGcmDecrypt(
   required Uint8List tag,
   required Uint8List ciphertext,
 }) {
-  assert(key.length == 32, 'AES-256-GCM requires a 32-byte key');
-  final cipher = GCMBlockCipher(AESEngine())
-    ..init(
-      false,
-      // 128 = authentication tag length in bits (16-byte tag), not key size.
-      AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)),
-    );
   try {
-    return cipher.process(Uint8List.fromList(<int>[...ciphertext, ...tag]));
+    return DesktopCryptoBackend.current.aes256GcmDecrypt(
+      key: key,
+      nonce: nonce,
+      ciphertext: ciphertext,
+      tag: tag,
+    );
   } catch (_) {
     throw const DesktopSecureStorageException(
       code: DesktopSecureStorageErrorCode.corruptRecord,
@@ -673,6 +660,8 @@ Uint8List _aesGcmDecrypt(
     );
   }
 }
+
+
 
 String _pemWrap(String b64) {
   final buffer = StringBuffer();

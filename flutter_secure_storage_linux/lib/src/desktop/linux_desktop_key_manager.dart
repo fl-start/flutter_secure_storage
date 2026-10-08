@@ -1,12 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage_platform_interface/desktop_secure_storage.dart';
 import 'package:path/path.dart' as p;
-import 'package:pointycastle/export.dart';
 
 import 'linux_systemd_creds.dart';
 import 'linux_tpm2_backend.dart';
@@ -412,7 +410,6 @@ class LinuxDesktopKeyManager extends DesktopPrivateKeyManager {
     meta['keys'] = keys;
     await _saveMeta(meta);
     _zero(material.privateKeyPkcs8Der);
-    _zero(material.legacyPrivateBlob);
     return handle;
   }
 
@@ -991,22 +988,8 @@ class LinuxDesktopKeyManager extends DesktopPrivateKeyManager {
         : DesktopKeyAlgorithm.rsa2048;
   }
 
-  Uint8List _spkiFromPkcs8(Uint8List pkcs8, DesktopKeyAlgorithm algorithm) {
-    // Best-effort: regenerate SPKI by parsing EC public from PKCS#8 when present.
-    if (algorithm == DesktopKeyAlgorithm.ecP256) {
-      try {
-        // Look for uncompressed point 0x04 || X || Y (65 bytes) near end.
-        for (var i = 0; i < pkcs8.length - 65; i++) {
-          if (pkcs8[i] == 0x04 && i + 65 <= pkcs8.length) {
-            final q = pkcs8.sublist(i, i + 65);
-            return DesktopCrypto.encodeEcP256Spki(q);
-          }
-        }
-      } catch (_) {}
-    }
-    // Fallback: empty SPKI placeholder regenerated on next create — store pkcs8 hash.
-    return DesktopCrypto.generate(algorithm).publicKeySpkiDer;
-  }
+  Uint8List _spkiFromPkcs8(Uint8List pkcs8, DesktopKeyAlgorithm algorithm) =>
+      DesktopCrypto.publicSpkiFromPkcs8(pkcs8);
 }
 
 class _AesGcmBlob {
@@ -1020,23 +1003,17 @@ class _AesGcmBlob {
   final Uint8List ciphertext;
 }
 
-Uint8List _randomBytes(int length) {
-  final rng = Random.secure();
-  return Uint8List.fromList(
-    List<int>.generate(length, (_) => rng.nextInt(256)),
-  );
-}
+Uint8List _randomBytes(int length) =>
+    DesktopCryptoBackend.current.randomBytes(length);
 
 _AesGcmBlob _aesGcmEncrypt(Uint8List key, Uint8List plaintext) {
   final nonce = _randomBytes(12);
-  final cipher = GCMBlockCipher(AESEngine())
-    ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
-  final out = cipher.process(plaintext);
-  return _AesGcmBlob(
+  final box = DesktopCryptoBackend.current.aes256GcmEncrypt(
+    key: key,
     nonce: nonce,
-    tag: out.sublist(out.length - 16),
-    ciphertext: out.sublist(0, out.length - 16),
+    plaintext: plaintext,
   );
+  return _AesGcmBlob(nonce: nonce, tag: box.tag, ciphertext: box.ciphertext);
 }
 
 Uint8List _aesGcmDecrypt(
@@ -1045,10 +1022,13 @@ Uint8List _aesGcmDecrypt(
   required Uint8List tag,
   required Uint8List ciphertext,
 }) {
-  final cipher = GCMBlockCipher(AESEngine())
-    ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
   try {
-    return cipher.process(Uint8List.fromList(<int>[...ciphertext, ...tag]));
+    return DesktopCryptoBackend.current.aes256GcmDecrypt(
+      key: key,
+      nonce: nonce,
+      ciphertext: ciphertext,
+      tag: tag,
+    );
   } catch (_) {
     throw const DesktopSecureStorageException(
       code: DesktopSecureStorageErrorCode.corruptRecord,

@@ -44,11 +44,48 @@ void main() {
   });
 
   test('legacy EC blob converts to PKCS#8', () {
-    final material = DesktopCrypto.generate(DesktopKeyAlgorithm.ecP256);
-    final pkcs8 = DesktopCrypto.toPkcs8Der(
-      material.legacyPrivateBlob,
+    final scalar = Uint8List.fromList(List<int>.generate(32, (i) => i + 1));
+    final expected = DesktopCrypto.toPkcs8Der(
+      Uint8List.fromList(<int>[...utf8.encode('ECP256PRIV'), ...scalar]),
       algorithm: DesktopKeyAlgorithm.ecP256,
     );
-    expect(pkcs8.first, 0x30);
+    expect(expected.first, 0x30);
+    expect(
+      DesktopCrypto.publicSpkiFromPkcs8(expected),
+      DesktopCryptoBackend.current.ecP256FromScalar(scalar).spkiDer,
+    );
+  });
+
+  test('every key algorithm signs and encodes a CSR', () {
+    for (final algorithm in DesktopKeyAlgorithm.values) {
+      final material = DesktopCrypto.generate(algorithm);
+      final sig = DesktopCrypto.sign(
+        material.privateKeyPkcs8Der,
+        Uint8List.fromList(utf8.encode('hello')),
+        keyAlgorithm: algorithm,
+        signatureAlgorithm: SignatureAlgorithm.ecdsaSha256,
+      );
+      expect(sig, isNotEmpty, reason: '$algorithm');
+      expect(
+        DesktopCrypto.publicSpkiFromPkcs8(material.privateKeyPkcs8Der),
+        material.publicKeySpkiDer,
+      );
+    }
+  });
+
+  test('a wrong passphrase is rejected', () {
+    final material = DesktopCrypto.generate(DesktopKeyAlgorithm.ecP256);
+    final encrypted = DesktopCrypto.encryptPkcs8Pbes2(
+      material.privateKeyPkcs8Der,
+      Uint8List.fromList(utf8.encode('right')),
+      iterations: 1000,
+    );
+    expect(
+      () => DesktopCrypto.decryptEncryptedPrivateKey(
+        encrypted,
+        Uint8List.fromList(utf8.encode('wrong')),
+      ),
+      throwsA(isA<DesktopSecureStorageException>()),
+    );
   });
 }

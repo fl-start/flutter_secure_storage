@@ -3,6 +3,7 @@ library;
 
 export 'src/desktop/desktop_capabilities.dart';
 export 'src/desktop/desktop_crypto.dart';
+export 'src/desktop/desktop_crypto_backend.dart';
 export 'src/desktop/desktop_enums.dart';
 export 'src/desktop/desktop_errors.dart';
 export 'src/desktop/desktop_key_id.dart';

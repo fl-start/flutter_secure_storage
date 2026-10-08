@@ -96,12 +96,15 @@ final class DesktopPrivateKeyManager {
         var providers = ["keychain"]
         if seAvailable { providers.append("secure_enclave") }
 
+        // Swift rejects #if inside a dictionary literal.
+        #if os(iOS)
+        let platformName = "ios"
+        #else
+        let platformName = "macos"
+        #endif
+
         return [
-            #if os(iOS)
-            "platform": "ios",
-#else
-            "platform": "macos",
-#endif
+            "platform": platformName,
             "availableProviders": providers,
             "selectedProvider": selected,
             "hardwareAvailable": seAvailable,

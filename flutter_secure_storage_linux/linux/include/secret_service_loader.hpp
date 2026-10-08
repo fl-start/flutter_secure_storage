@@ -2,6 +2,10 @@
 
 #include <glib.h>
 
+// GCancellable is a GIO type. These entry points only pass the pointer
+// through dlsym'd libsecret symbols, so the plugin can build without gio.
+typedef struct _GCancellable GCancellable;
+
 #include <mutex>
 #include <string>
 

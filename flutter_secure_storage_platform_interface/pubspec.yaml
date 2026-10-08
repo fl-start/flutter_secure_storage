@@ -11,7 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   plugin_platform_interface: ^2.0.1
-  pointycastle: ^3.9.1
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:

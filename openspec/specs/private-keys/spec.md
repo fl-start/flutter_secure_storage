@@ -11,7 +11,7 @@ Define requirements for asymmetric private-key lifecycle across fl-start support
 | Android | Android Keystore–backed private keys (unified API) |
 | iOS | Secure Enclave / Keychain |
 | macOS | Secure Enclave / Keychain |
-| Windows | DPAPI-wrapped FSS1 + `DesktopCrypto` PKCS#8/PKCS#10; TPM probe (NCrypt resident TBD) |
+| Windows | TPM-resident keys via Microsoft Platform Crypto Provider (NCrypt); otherwise DPAPI-wrapped FSS1 + `DesktopCrypto` PKCS#8/PKCS#10 |
 | Linux | Soft libsecret / protected-file / systemd-creds wrap + FSS1; TPM2 via `tpm2-tools` |
 | **Web** | **OUT OF SCOPE** — always unsupported |
 
@@ -130,7 +130,7 @@ Handles MUST be metadata-only (never private key bytes). Required honesty fields
 
 | Platform | On-disk / wrap | Export | CSR |
 |----------|----------------|--------|-----|
-| Windows | DPAPI-wrapped **FSS1** records; software keys via `DesktopCrypto` | Standards encrypted PKCS#8 (PBES2); dual-read legacy FSS-EPK1 where implemented | PKCS#10 |
+| Windows | TPM keys: no record (provider key name + public key in `keys.json`); software keys: DPAPI-wrapped **FSS1** via `DesktopCrypto` | Software keys only: standards encrypted PKCS#8 (PBES2); dual-read legacy FSS-EPK1 where implemented. TPM keys are never exportable | PKCS#10 (TPM keys: signed inside the TPM) |
 | Linux | FSS1 + Secret Service / protected-file / systemd-creds DEK wrap | Standards encrypted PKCS#8 (PBES2) | PKCS#10 |
 | macOS / iOS (Apple) | SE / Keychain | **FSS-EPK1** currently (migration to standards PKCS#8 MAY follow) | **FSS-CSR1** currently (PKCS#10 migration MAY follow) |
 | Android | Keystore | Encrypted export only per policy; no plaintext | CSR without export when supported |
@@ -155,7 +155,7 @@ Import MUST accept encrypted material consistent with the platform’s supported
 1. If only wrapping is hardware-backed, `privateKeyHardwareBacked` MUST be `false`.
 2. `hardwareBackedPreferred` MAY fall back and MUST set `fallbackReason` when it does.
 3. `hardwareBackedRequired` MUST NOT silently fall back; fail with `hardwareRequiredButUnavailable` (or equivalent typed code).
-4. Capability flags MUST NOT over-claim NCrypt-resident TPM keys on Windows while only probe/software+DPAPI exists.
+4. On Windows, handle `hardwareBacked` MUST be `true` only for keys created inside the TPM through the Platform Crypto Provider; software keys stay `false` even when a TPM is present.
 
 ## Platform requirements
 
@@ -181,12 +181,21 @@ Import MUST accept encrypted material consistent with the platform’s supported
 
 ### Windows
 
-- Persist private-key records as versioned **FSS1** with DPAPI-wrapped DEKs; prefer Local AppData for new private-key material.
-- Software key generation / PKCS#8 / PKCS#10 via shared `DesktopCrypto`.
-- TPM: runtime **probe** (e.g. Platform Crypto Provider / `NCryptOpenStorageProvider`) SHALL inform `hardwareAvailable`.
-- **NCrypt-persisted / TPM-resident private keys are TBD** — until implemented, per-key `hardwareBacked` MUST stay honest (`false` for software+DPAPI material) even if TPM is detectable.
-- `machineScoped` / LOCAL_MACHINE DPAPI MUST default off and be explicit when enabled.
+- TPM availability SHALL come from the Microsoft Platform Crypto Provider reporting a **TPM 2.0** (`PCP_PLATFORM_TYPE`), and SHALL inform `hardwareAvailable`.
+- `hardwareBackedRequired` SHALL create the key inside the TPM with `NCryptCreatePersistedKey` / `NCryptFinalizeKey`, export policy `0` and signing-only key usage. The private key MUST NOT exist in process memory or on disk outside the TPM provider's own key blob.
+  - Supported: `ecP256`, `rsa2048`; `rsa3072` only where the TPM supports it.
+  - MUST fail with `algorithmUnsupported` for `ed25519`, and with `invalidConfiguration` for `exportableEncrypted` or `requireUserPresence`.
+  - MUST NOT fall back to software when TPM creation fails.
+- `hardwareBackedPreferred` SHALL use the TPM for non-exportable, non-Ed25519 keys without user presence when a TPM is available, and SHALL fall back to a software key when TPM creation fails.
+- TPM keys SHALL have a random provider key name (`fss-dsk-<hex>`) recorded in `keys.json`; no FSS1 record is written for them.
+- `getPublicKey` for a TPM key SHALL read the public key from the TPM, not from `keys.json`.
+- `sign` for a TPM key SHALL sign SHA-256 inside the TPM. ECDSA signatures SHALL be ASN.1 DER, matching software keys; RSA SHALL honour `rsaPssSha256` (salt 32) and otherwise use PKCS#1 v1.5.
+- `createCertificateSigningRequest` for a TPM key SHALL build PKCS#10 in Dart and sign it inside the TPM.
+- `deletePrivateKey` SHALL delete the key from the TPM before removing its record; a key already gone from the TPM is not an error.
+- Software keys: persist as versioned **FSS1** with DPAPI-wrapped DEKs; prefer Local AppData; generation / PKCS#8 / PKCS#10 via shared `DesktopCrypto`.
+- `machineScoped` / LOCAL_MACHINE DPAPI (and `NCRYPT_MACHINE_KEY_FLAG` for TPM keys) MUST default off and be explicit when enabled.
 - Non-exportable policy MUST refuse export even if material is software-stored.
+- Key attestation is not provided; the server cannot yet verify that a reported TPM key is TPM-resident.
 
 ### Linux
 
@@ -212,5 +221,5 @@ New desktop private-key blobs SHOULD use **FSS1** (`docs/architecture/05-record-
 - Web private keys
 - Plaintext export helpers
 - Silent algorithm substitution
-- Claiming Windows NCrypt resident TPM completion prematurely
+- Windows TPM key attestation (not yet provided)
 - Embedding product-wide escrow keys

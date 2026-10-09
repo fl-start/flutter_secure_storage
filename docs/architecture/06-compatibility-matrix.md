@@ -7,7 +7,7 @@
 | KV API | Yes | Yes | Yes | Yes | Yes | **Unsupported** |
 | Unified private-key API | Yes (Keystore/StrongBox) | Yes (SE/Keychain) | Yes | Yes (SE/Keychain) | Yes | **Unsupported** |
 | FSS1 versioned records | Meta in prefs | Meta in Keychain | Private keys | Meta in Keychain | Private keys (+ file KV) | — |
-| Hardware preferred fallback | StrongBox → TEE → software | SE → Keychain | TPM probe → DPAPI | SE → Keychain | TPM2 tools → SS/systemd-creds → file | — |
+| Hardware preferred fallback | StrongBox → TEE → software | SE → Keychain | TPM (Platform Crypto Provider) → DPAPI | SE → Keychain | TPM2 tools → SS/systemd-creds → file | — |
 | Hardware required fail-closed | Yes | Yes | Yes | Yes | Yes | — |
 | Exportable encrypted | FSS-EPK1 | FSS-EPK1 | PKCS#8 PBES2 | FSS-EPK1 | PKCS#8 PBES2 | — |
 | Non-exportable refuse export | Yes | Yes | Yes | Yes | Yes | — |

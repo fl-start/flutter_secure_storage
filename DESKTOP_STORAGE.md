@@ -20,7 +20,7 @@ See also:
 | Android | EncryptedSharedPreferences / Keystore wrap | `AndroidOptions` | Android Keystore / StrongBox + software exportable |
 | iOS | Keychain (+ optional SE wrap) | `IOSOptions.accountName` | Secure Enclave / Keychain |
 | macOS | Keychain (+ optional SE wrap) | `MacOsOptions.accountName` | Secure Enclave / Keychain |
-| Windows | DPAPI + JSON (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | DPAPI-wrapped FSS1 + TPM probe |
+| Windows | DPAPI + JSON (legacy CredMan + AES-256-GCM `.secure`) | `WindowsOptions.accountName` | TPM-resident (Platform Crypto Provider) or DPAPI-wrapped FSS1 |
 | Linux | Soft-loaded libsecret + protected-file / systemd-creds | `LinuxOptions.accountName` | FSS1 + PKCS#8/PKCS#10; TPM2 tools |
 | Web | — | — | **Unsupported** |
 
@@ -32,6 +32,7 @@ See also:
 - `useLocalMachine`: `CRYPTPROTECT_LOCAL_MACHINE` (not default).
 - `useBackwardCompatibility`: migrates legacy Credential Manager / `.secure` (Roaming) into DPAPI JSON.
 - New private-key records prefer **Local AppData**.
+- Private keys: non-exportable keys requesting hardware are created **inside the TPM** through the Microsoft Platform Crypto Provider (`ecP256`, `rsa2048`; `rsa3072` where supported). Signing and CSRs happen in the TPM; the key is never exportable. Ed25519, exportable, and user-presence keys stay software keys (DPAPI-wrapped FSS1).
 
 ### macOS / iOS
 

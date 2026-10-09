@@ -6,24 +6,34 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter_secure_storage_platform_interface/desktop_secure_storage.dart';
+import 'package:flutter_secure_storage_windows/src/desktop/windows_der.dart';
+import 'package:flutter_secure_storage_windows/src/desktop/windows_tpm_key_backend.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:win32/win32.dart';
 
-/// Windows [DesktopPrivateKeyManager] using DPAPI-wrapped FSS1 records and
-/// software key material. TPM availability is probed via `ncrypt.dll`.
+/// Windows [DesktopPrivateKeyManager].
+///
+/// Non-exportable keys that request hardware are created inside the TPM
+/// through the Microsoft Platform Crypto Provider and never leave it. Other
+/// keys are software key material in DPAPI-wrapped FSS1 records.
 class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
   /// Creates a Windows desktop key manager.
   WindowsDesktopKeyManager({
     Directory? storageRoot,
     bool? tpmAvailableOverride,
+    WindowsTpmKeyBackend? tpmBackend,
   })  : _storageRoot = storageRoot,
-        _tpmAvailableOverride = tpmAvailableOverride;
+        _tpmAvailableOverride = tpmAvailableOverride,
+        _tpm = tpmBackend ?? NcryptTpmKeyBackend();
 
   final Directory? _storageRoot;
   final bool? _tpmAvailableOverride;
+  final WindowsTpmKeyBackend _tpm;
+  bool? _tpmProbe;
 
   static const _metaFile = 'keys.json';
+  static const _metaNcryptKeyName = 'ncryptKeyName';
   static const _providerDpapi = 'windows_dpapi';
   static const _providerPlatformCrypto = 'MS_PLATFORM_CRYPTO_PROVIDER';
   static const _providerSoftwareCng = 'Microsoft Software Key Storage Provider';
@@ -75,34 +85,13 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     await tmp.rename(file.path);
   }
 
-  /// Probes Microsoft Platform Crypto Provider without assuming TPM success.
+  /// True when a TPM 2.0 is reachable through the Microsoft Platform Crypto
+  /// Provider. The result is cached for the life of this manager.
   bool probeTpm() {
     if (_tpmAvailableOverride != null) {
       return _tpmAvailableOverride!;
     }
-    try {
-      final ncrypt = DynamicLibrary.open('ncrypt.dll');
-      final open = ncrypt.lookupFunction<
-          Int32 Function(Pointer<IntPtr>, Pointer<Utf16>, Uint32),
-          int Function(Pointer<IntPtr>, Pointer<Utf16>, int)>(
-        'NCryptOpenStorageProvider',
-      );
-      final free = ncrypt.lookupFunction<Int32 Function(IntPtr),
-          int Function(int)>('NCryptFreeObject');
-      return using((arena) {
-        final provider = arena<IntPtr>();
-        final name =
-            'Microsoft Platform Crypto Provider'.toNativeUtf16(allocator: arena);
-        final status = open(provider, name, 0);
-        if (status != 0) {
-          return false;
-        }
-        free(provider.value);
-        return true;
-      });
-    } catch (_) {
-      return false;
-    }
+    return _tpmProbe ??= _tpm.probe();
   }
 
   @override
@@ -141,6 +130,9 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
         selected = _providerDpapi;
     }
 
+    // TPM-resident keys are non-exportable and cannot be Ed25519.
+    final tpmOnly =
+        protection == DesktopSecureStorageProtection.hardwareBackedRequired;
     return DesktopSecureStorageCapabilities(
       platform: 'windows',
       availableProviders: providers,
@@ -149,15 +141,15 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
       storageProtectionHardwareBacked: storageHw,
       privateKeyHardwareBacked: privateHw,
       supportsNonExportableKeys: true,
-      supportsExportableKeys: true,
+      supportsExportableKeys: !tpmOnly,
       supportsUserPresence: false,
       supportsMachineScope: true,
       supportsCsrGeneration: true,
-      supportedAlgorithms: const [
+      supportedAlgorithms: [
         DesktopKeyAlgorithm.rsa2048,
         DesktopKeyAlgorithm.rsa3072,
         DesktopKeyAlgorithm.ecP256,
-        DesktopKeyAlgorithm.ed25519,
+        if (!tpmOnly) DesktopKeyAlgorithm.ed25519,
       ],
       supportedExportFormats: const [
         PrivateKeyEncoding.pemPkcs8,
@@ -184,31 +176,58 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     }
 
     final caps = await getCapabilities(protection: options.protection);
-    if (options.protection ==
-            DesktopSecureStorageProtection.hardwareBackedRequired &&
-        !caps.hardwareAvailable) {
-      throw const DesktopSecureStorageException(
-        code: DesktopSecureStorageErrorCode.hardwareRequiredButUnavailable,
-        message: 'TPM / platform crypto provider unavailable',
-        provider: _providerPlatformCrypto,
-      );
-    }
-
-    if (options.algorithm == DesktopKeyAlgorithm.ed25519 &&
-        options.protection ==
-            DesktopSecureStorageProtection.hardwareBackedRequired) {
-      throw const DesktopSecureStorageException(
-        code: DesktopSecureStorageErrorCode.algorithmUnsupported,
-        message: 'ed25519 is not supported by Windows TPM providers',
-        provider: _providerPlatformCrypto,
-      );
-    }
-
     final exportable =
         options.exportPolicy == PrivateKeyExportPolicy.exportableEncrypted;
-    // Private keys are software-generated and DPAPI-wrapped in this release.
-    // Capabilities still report TPM availability via probe; per-key flags stay
-    // honest until NCrypt-persisted / TPM-wrapped keys are implemented.
+    final hardwareRequired = options.protection ==
+        DesktopSecureStorageProtection.hardwareBackedRequired;
+
+    if (hardwareRequired) {
+      if (!caps.hardwareAvailable) {
+        throw const DesktopSecureStorageException(
+          code: DesktopSecureStorageErrorCode.hardwareRequiredButUnavailable,
+          message: 'TPM / platform crypto provider unavailable',
+          provider: _providerPlatformCrypto,
+        );
+      }
+      if (options.algorithm == DesktopKeyAlgorithm.ed25519) {
+        throw const DesktopSecureStorageException(
+          code: DesktopSecureStorageErrorCode.algorithmUnsupported,
+          message: 'ed25519 is not supported by Windows TPM providers',
+          provider: _providerPlatformCrypto,
+        );
+      }
+      if (exportable) {
+        throw const DesktopSecureStorageException(
+          code: DesktopSecureStorageErrorCode.invalidConfiguration,
+          message: 'TPM-resident keys cannot be exportable',
+          provider: _providerPlatformCrypto,
+        );
+      }
+      if (options.requireUserPresence) {
+        throw const DesktopSecureStorageException(
+          code: DesktopSecureStorageErrorCode.invalidConfiguration,
+          message: 'user presence is not supported for Windows TPM keys',
+          provider: _providerPlatformCrypto,
+        );
+      }
+      return _createTpmKey(keyId, options, meta, keys);
+    }
+
+    final tpmEligible = options.protection ==
+            DesktopSecureStorageProtection.hardwareBackedPreferred &&
+        caps.hardwareAvailable &&
+        !exportable &&
+        !options.requireUserPresence &&
+        options.algorithm != DesktopKeyAlgorithm.ed25519;
+    if (tpmEligible) {
+      try {
+        return await _createTpmKey(keyId, options, meta, keys);
+      } on DesktopSecureStorageException {
+        // Preferred, not required: fall back to a software key below.
+      }
+    }
+
+    // Software key material, DPAPI-wrapped in an FSS1 record.
     const claimPrivateHw = false;
     const claimStorageHw = false;
 
@@ -274,6 +293,71 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     return handle;
   }
 
+  /// Creates [keyId] inside the TPM. Only the provider key name and the
+  /// public key are recorded; there is no FSS1 record because no key material
+  /// ever reaches this process.
+  Future<DesktopPrivateKeyHandle> _createTpmKey(
+    String keyId,
+    DesktopPrivateKeyOptions options,
+    Map<String, dynamic> meta,
+    Map<String, dynamic> keys,
+  ) async {
+    // A random provider name keeps keys from different apps or stores under
+    // the same Windows user from colliding in the TPM key namespace.
+    final keyName = 'fss-dsk-${_hex(_randomBytes(16))}';
+    final spki = _tpm.createKey(
+      keyName: keyName,
+      algorithm: options.algorithm,
+      machineScoped: options.machineScoped,
+    );
+
+    final handle = DesktopPrivateKeyHandle(
+      keyId: keyId,
+      provider: _providerPlatformCrypto,
+      algorithm: options.algorithm,
+      exportPolicy: PrivateKeyExportPolicy.nonExportable,
+      hardwareBacked: true,
+      storageProtectionHardwareBacked: true,
+      deviceBound: true,
+      machineScoped: options.machineScoped,
+      userPresenceRequired: false,
+    );
+
+    keys[keyId] = <String, dynamic>{
+      ...handle.toMap(),
+      'publicKeySpki': base64Encode(spki),
+      _metaNcryptKeyName: keyName,
+    };
+    meta['keys'] = keys;
+    try {
+      await _saveMeta(meta);
+    } catch (_) {
+      _tpm.deleteKey(keyName: keyName, machineScoped: options.machineScoped);
+      rethrow;
+    }
+    return handle;
+  }
+
+  /// Provider key name when [keyId] is TPM-resident, else null.
+  Future<({String keyName, DesktopPrivateKeyHandle handle})?> _tpmKey(
+    String keyId,
+  ) async {
+    final id = normalizeAndValidateKeyId(keyId);
+    final entry = ((await _loadMeta())['keys'] as Map?)?[id];
+    if (entry is! Map) {
+      return null;
+    }
+    final keyName = entry[_metaNcryptKeyName];
+    if (keyName is! String || keyName.isEmpty) {
+      return null;
+    }
+    return (
+      keyName: keyName,
+      handle:
+          DesktopPrivateKeyHandle.fromMap(Map<Object?, Object?>.from(entry)),
+    );
+  }
+
   @override
   Future<DesktopPrivateKeyHandle?> getPrivateKeyHandle(String keyId) async {
     final id = normalizeAndValidateKeyId(keyId);
@@ -308,7 +392,16 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
         message: 'private key not found',
       );
     }
-    final der = base64Decode(entry['publicKeySpki'] as String);
+    final tpmKey = await _tpmKey(id);
+    // TPM keys read the public key from the TPM itself, so an edited
+    // keys.json cannot substitute another device's public key.
+    final der = tpmKey != null
+        ? _tpm.publicKeySpki(
+            keyName: tpmKey.keyName,
+            algorithm: tpmKey.handle.algorithm,
+            machineScoped: tpmKey.handle.machineScoped,
+          )
+        : base64Decode(entry['publicKeySpki'] as String);
     if (encoding == PublicKeyEncoding.spkiDer) {
       return Uint8List.fromList(der);
     }
@@ -324,6 +417,16 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     Uint8List data, {
     required SignatureAlgorithm algorithm,
   }) async {
+    final tpmKey = await _tpmKey(keyId);
+    if (tpmKey != null) {
+      return _tpm.sign(
+        keyName: tpmKey.keyName,
+        algorithm: tpmKey.handle.algorithm,
+        machineScoped: tpmKey.handle.machineScoped,
+        data: data,
+        signatureAlgorithm: algorithm,
+      );
+    }
     final privateDer =
         await _loadPrivateKeyDer(keyId, forExport: false);
     try {
@@ -449,6 +552,14 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
   @override
   Future<void> deletePrivateKey(String keyId) async {
     final id = normalizeAndValidateKeyId(keyId);
+    final tpmKey = await _tpmKey(id);
+    if (tpmKey != null) {
+      // Delete from the TPM first so a failure keeps the record for a retry.
+      _tpm.deleteKey(
+        keyName: tpmKey.keyName,
+        machineScoped: tpmKey.handle.machineScoped,
+      );
+    }
     final meta = await _loadMeta();
     final keys = Map<String, dynamic>.from(meta['keys'] as Map? ?? {});
     keys.remove(id);
@@ -467,6 +578,23 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
     String keyId,
     CertificateSigningRequestOptions options,
   ) async {
+    final tpmKey = await _tpmKey(keyId);
+    if (tpmKey != null) {
+      final keyAlgorithm = tpmKey.handle.algorithm;
+      final requestInfo = WindowsDer.certificationRequestInfo(
+        subjectDn: options.subjectDistinguishedName,
+        publicKeySpkiDer: await getPublicKey(keyId),
+      );
+      final scheme = keyAlgorithm == DesktopKeyAlgorithm.ecP256
+          ? SignatureAlgorithm.ecdsaSha256
+          : SignatureAlgorithm.rsaPkcs1Sha256;
+      return WindowsDer.certificationRequest(
+        requestInfo: requestInfo,
+        signatureAlgorithm:
+            WindowsDer.signatureAlgorithmIdentifier(keyAlgorithm, scheme),
+        signature: await sign(keyId, requestInfo, algorithm: scheme),
+      );
+    }
     final privateDer = await _loadPrivateKeyDer(keyId, forExport: false);
     try {
       final handle = await getPrivateKeyHandle(keyId);
@@ -629,6 +757,9 @@ class _AesGcmBlob {
 
 Uint8List _randomBytes(int length) =>
     DesktopCryptoBackend.current.randomBytes(length);
+
+String _hex(Uint8List bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
 _AesGcmBlob _aesGcmEncrypt(Uint8List key, Uint8List plaintext) {
   final nonce = _randomBytes(12);

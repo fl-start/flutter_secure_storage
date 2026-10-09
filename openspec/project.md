@@ -37,7 +37,7 @@ Repository: [github.com/fl-start/flutter_secure_storage](https://github.com/fl-s
 - **Global recovery / escrow master keys.** The product MUST NOT embed a product-wide recovery key.
 - **Merging `develop` with `main`.** The long-lived `develop` branch is frozen for fl-start production purposes and MUST NEVER be synced with `main` (see [specs/branching](specs/branching/spec.md)).
 - **Upstream `develop` as the production merge source.** fl-start production releases MUST NOT be driven by an “always merge upstream/develop” policy.
-- **NCrypt-resident TPM private keys on Windows as a current guarantee.** TPM probe / tools exist; full NCrypt-persisted resident keys are TBD and MUST NOT be advertised as complete.
+- **Windows TPM key attestation.** TPM-resident keys exist on Windows (Platform Crypto Provider), but attestation of those keys to a remote party is not provided and MUST NOT be advertised.
 - **Guaranteeing same-user malware resistance** for software / DPAPI / Secret Service backends.
 
 ## Package map

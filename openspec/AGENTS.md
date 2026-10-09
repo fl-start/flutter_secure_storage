@@ -37,7 +37,7 @@ This file tells coding agents how to work safely in this repository.
 - Preserve federated plugin boundaries; register platform managers via package `registerWith` / plugin registration.
 - When changing export formats, keep dual-read where already implemented (e.g. PKCS#8 PBES2 + legacy FSS-EPK1 decrypt).
 - Update OpenSpec + changelogs when behavior or guarantees change.
-- Do not invent NCrypt-resident TPM completeness on Windows; document TBD honestly.
+- Windows TPM keys are NCrypt-resident (Platform Crypto Provider). Do not claim key attestation, user presence, or Ed25519 for them.
 - Apple export/CSR today may still use **FSS-EPK1 / FSS-CSR1**; Windows/Linux prefer standards PKCS#8 / PKCS#10 — do not claim Apple already migrated unless code does.
 
 ## Testing expectations

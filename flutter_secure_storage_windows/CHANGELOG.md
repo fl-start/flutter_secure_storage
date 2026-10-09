@@ -1,3 +1,9 @@
+## 5.2.0
+
+* Non-exportable private keys that request hardware are now created inside the TPM through the Microsoft Platform Crypto Provider (EC P-256, RSA 2048, RSA 3072 where supported). Signing and CSRs run in the TPM; handles report `hardwareBacked: true` only for these keys.
+* `hardwareBackedRequired` rejects exportable, Ed25519, and user-presence keys instead of creating software keys; `hardwareBackedPreferred` falls back to software when the TPM cannot create the key.
+* TPM detection now requires the provider to report a TPM 2.0.
+
 ## 5.1.0
 
 * Standards PKCS#8 PBES2 export/import and PKCS#10 CSR via shared `DesktopCrypto`.

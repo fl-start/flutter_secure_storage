@@ -673,20 +673,19 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
       plainBlob.ref.pbData = pPlain;
       final encBlob = alloc<CRYPT_INTEGER_BLOB>();
       final flags = machineScoped ? 0x4 : 0;
-      if (CryptProtectData(
-            plainBlob,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            flags,
-            encBlob,
-          ) ==
-          0) {
+      final Win32Result(value: ok, error: error) = CryptProtectData(
+        plainBlob,
+        null,
+        null,
+        null,
+        flags,
+        encBlob,
+      );
+      if (!ok) {
         throw DesktopSecureStorageException(
           code: DesktopSecureStorageErrorCode.accessDenied,
           message: 'CryptProtectData failed',
-          nativeStatusCode: GetLastError(),
+          nativeStatusCode: error.toHRESULT(),
           provider: _providerDpapi,
         );
       }
@@ -696,7 +695,7 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
         );
       } finally {
         if (encBlob.ref.pbData.address != NULL) {
-          LocalFree(encBlob.ref.pbData);
+          LocalFree(HLOCAL(encBlob.ref.pbData));
         }
       }
     });
@@ -714,20 +713,19 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
       encBlob.ref.pbData = pEnc;
       final plainBlob = alloc<CRYPT_INTEGER_BLOB>();
       final flags = machineScoped ? 0x4 : 0;
-      if (CryptUnprotectData(
-            encBlob,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            flags,
-            plainBlob,
-          ) ==
-          0) {
+      final Win32Result(value: ok, error: error) = CryptUnprotectData(
+        encBlob,
+        null,
+        null,
+        null,
+        flags,
+        plainBlob,
+      );
+      if (!ok) {
         throw DesktopSecureStorageException(
           code: DesktopSecureStorageErrorCode.keyUnwrapFailed,
           message: 'CryptUnprotectData failed',
-          nativeStatusCode: GetLastError(),
+          nativeStatusCode: error.toHRESULT(),
           provider: _providerDpapi,
         );
       }
@@ -737,7 +735,7 @@ class WindowsDesktopKeyManager extends DesktopPrivateKeyManager {
         );
       } finally {
         if (plainBlob.ref.pbData.address != NULL) {
-          LocalFree(plainBlob.ref.pbData);
+          LocalFree(HLOCAL(plainBlob.ref.pbData));
         }
       }
     });

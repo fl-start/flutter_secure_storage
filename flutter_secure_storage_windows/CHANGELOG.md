@@ -1,3 +1,10 @@
+## 6.0.0
+
+* **Breaking:** requires `win32` ^6.0.1, Dart 3.10, and Flutter 3.38.
+* Key-value storage: serialized read/modify/write, atomic writes with a `.bak` of the previous file, and backup recovery. Unreadable files are quarantined as `.corrupt.<millis>` instead of deleted.
+* Upgrades from releases that kept every namespace in `flutter_secure_storage.dat`: the file is snapshotted on first run and each custom namespace is seeded from it once, so per-namespace files never hide existing values.
+* The native plugin no longer needs ATL (`atlstr.h`); strings convert through `MultiByteToWideChar` / `WideCharToMultiByte`.
+
 ## 5.2.0
 
 * Non-exportable private keys that request hardware are now created inside the TPM through the Microsoft Platform Crypto Provider (EC P-256, RSA 2048, RSA 3072 where supported). Signing and CSRs run in the TPM; handles report `hardwareBacked: true` only for these keys.

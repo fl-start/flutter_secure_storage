@@ -28,9 +28,10 @@ void main() {
           .listSync(followLinks: false)
           .whereType<File>()
           .where(
+            // Primary, namespaced, backup, temp, quarantine, and migration
+            // files all share the `flutter_secure_storage` prefix.
             (f) =>
-                path.basename(f.path) == encryptedJsonFileName ||
-                path.basename(f.path).startsWith('flutter_secure_storage_') ||
+                path.basename(f.path).startsWith('flutter_secure_storage') ||
                 f.path.endsWith('.secure'),
           )
           .forEach((f) => f.deleteSync());
@@ -1197,6 +1198,182 @@ void main() {
         await target.deleteAll(options: optionsA);
         expect(await target.read(key: key, options: optionsA), isNull);
         expect(await target.read(key: key, options: optionsB), valueB);
+      }),
+    );
+  });
+
+  group('Shared-file migration and file safety', () {
+    const defaultOptions = {'useBackwardCompatibility': 'false'};
+    const vaultOptions = {
+      'useBackwardCompatibility': 'false',
+      'accountName': 'secmail.crypto',
+    };
+    const mailboxOptions = {
+      'useBackwardCompatibility': 'false',
+      'accountName': 'mailbox_db_1',
+    };
+
+    FlutterSecureStoragePlatform createTarget() {
+      TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+            (methodCall) async {
+              assert(false, 'MethodChanel is called.');
+              return null;
+            },
+          );
+      return ffi.FlutterSecureStorageWindows();
+    }
+
+    /// Writes the single shared file older releases used for every
+    /// namespace, using this release's own DPAPI encoding.
+    Future<void> writeLegacySharedFile(Map<String, String> entries) async {
+      await ffi.DpapiJsonFileMapStorage().save(entries, defaultOptions);
+      // That save ran the first-run check; start again from a pre-upgrade
+      // state holding only the shared file.
+      final directory = await getApplicationSupportDirectory();
+      for (final name in [
+        ffi.namespaceLayoutMarkerFileName,
+        ffi.legacySharedSnapshotFileName,
+      ]) {
+        final file = File(path.join(directory.path, name));
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      }
+    }
+
+    test(
+      'custom namespaces keep values written to the legacy shared file',
+      () => withFfi(() async {
+        await writeLegacySharedFile({
+          'scomm.vault.dkek': 'vault-key',
+          'mailbox_db_1.key': 'db-key',
+          'session': 'token',
+        });
+
+        final target = createTarget();
+        expect(
+          await target.read(key: 'scomm.vault.dkek', options: vaultOptions),
+          'vault-key',
+        );
+        expect(
+          await target.read(key: 'mailbox_db_1.key', options: mailboxOptions),
+          'db-key',
+        );
+        expect(
+          await target.read(key: 'session', options: defaultOptions),
+          'token',
+        );
+
+        // Seeded namespaces now have their own files.
+        final directory = await getApplicationSupportDirectory();
+        expect(
+          File(
+            path.join(
+              directory.path,
+              ffi.encryptedJsonFileNameForOptions(vaultOptions),
+            ),
+          ).existsSync(),
+          isTrue,
+        );
+      }),
+    );
+
+    test(
+      'the snapshot is taken before the default namespace changes',
+      () => withFfi(() async {
+        await writeLegacySharedFile({'scomm.vault.dkek': 'vault-key'});
+
+        final target = createTarget();
+        // The default namespace rewrites the shared file first.
+        await target.deleteAll(options: defaultOptions);
+        expect(
+          await target.read(key: 'scomm.vault.dkek', options: vaultOptions),
+          'vault-key',
+        );
+      }),
+    );
+
+    test(
+      'deleteAll on a seeded namespace is not undone by seeding again',
+      () => withFfi(() async {
+        await writeLegacySharedFile({'scomm.vault.dkek': 'vault-key'});
+
+        final target = createTarget();
+        expect(
+          await target.read(key: 'scomm.vault.dkek', options: vaultOptions),
+          'vault-key',
+        );
+        await target.deleteAll(options: vaultOptions);
+        expect(
+          await target.read(key: 'scomm.vault.dkek', options: vaultOptions),
+          isNull,
+        );
+        expect(
+          await createTarget().read(
+            key: 'scomm.vault.dkek',
+            options: vaultOptions,
+          ),
+          isNull,
+        );
+      }),
+    );
+
+    test(
+      'a fresh install never copies the default namespace into others',
+      () => withFfi(() async {
+        final target = createTarget();
+        await target.write(
+          key: 'session',
+          value: 'token',
+          options: defaultOptions,
+        );
+        expect(
+          await createTarget().read(key: 'session', options: vaultOptions),
+          isNull,
+        );
+      }),
+    );
+
+    test(
+      'an unreadable file is quarantined and the backup recovered',
+      () => withFfi(() async {
+        final target = createTarget();
+        await target.write(key: 'k', value: 'v1', options: vaultOptions);
+        await target.write(key: 'k', value: 'v2', options: vaultOptions);
+
+        final directory = await getApplicationSupportDirectory();
+        final primary = File(
+          path.join(
+            directory.path,
+            ffi.encryptedJsonFileNameForOptions(vaultOptions),
+          ),
+        )..writeAsBytesSync([1, 2, 3, 4]);
+
+        // The backup holds the previous good contents.
+        expect(await target.read(key: 'k', options: vaultOptions), 'v1');
+        expect(
+          directory
+              .listSync()
+              .map((e) => path.basename(e.path))
+              .where((name) => name.contains('.corrupt.')),
+          isNotEmpty,
+        );
+        expect(primary.existsSync(), isTrue);
+      }),
+    );
+
+    test(
+      'concurrent writes keep every key',
+      () => withFfi(() async {
+        final target = createTarget();
+        await Future.wait([
+          for (var i = 0; i < 20; i++)
+            target.write(key: 'k$i', value: 'v$i', options: vaultOptions),
+        ]);
+        final all = await target.readAll(options: vaultOptions);
+        expect(all.length, 20);
       }),
     );
   });

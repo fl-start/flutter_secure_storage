@@ -8,7 +8,10 @@ set(PLUGIN_NAME "flutter_secure_storage_windows_plugin")
 
 add_library(${PLUGIN_NAME} SHARED
   "flutter_secure_storage_windows_plugin.cpp"
+  "fss_win_string_utils.cpp"
 )
+target_include_directories(${PLUGIN_NAME} PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}")
 apply_standard_settings(${PLUGIN_NAME})
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)

@@ -1,3 +1,7 @@
+## Unreleased
+
+- Windows implementation 6.0.0: requires `win32` ^6.0.1 (Dart 3.10, Flutter 3.38); safer key-value file handling and migration from the single shared file. See `flutter_secure_storage_windows/CHANGELOG.md`.
+
 ## 11.0.4
 
 ### Unified private-key API + mobile (fl-start)

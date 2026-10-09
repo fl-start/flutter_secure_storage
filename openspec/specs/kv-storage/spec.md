@@ -64,8 +64,12 @@ Platform options types (non-exhaustive): `AndroidOptions`, `IOSOptions` / `Apple
 
 ### Windows
 
-- Default KV backend SHALL encrypt a JSON object with **DPAPI**, stored under app support as `flutter_secure_storage_<accountName>.dat`.
+- Default KV backend SHALL encrypt a JSON object with **DPAPI**, stored under app support as `flutter_secure_storage.dat` for the default namespace and `flutter_secure_storage_<accountName>.dat` for others.
 - `WindowsOptions.accountName` SHALL select the file namespace (default `flutter_secure_storage_service`).
+- Reads and writes through one plugin instance SHALL be serialized so concurrent writes cannot drop keys.
+- Writes SHALL be atomic (temp file + rename) and SHALL keep the previous good file as `.bak`.
+- A file that cannot be decrypted or parsed MUST NOT be deleted: load SHALL try `.bak`, and SHALL move the unreadable file aside as `.corrupt.<millis>`.
+- Releases before 6.0.0 of `flutter_secure_storage_windows` (and SecMail's vendored copy) wrote **every** namespace into `flutter_secure_storage.dat`. On first run, before touching storage, the backend SHALL snapshot that file as `flutter_secure_storage.legacy-shared.dat` and write the marker `flutter_secure_storage.namespaces-v2`. A custom namespace with no file of its own SHALL be seeded once from the snapshot and marked with `<file>.seeded`; `deleteAll` SHALL keep that marker so cleared data is not seeded again. Installs with no shared file SHALL never seed.
 - `useLocalMachine` SHALL map to `CRYPTPROTECT_LOCAL_MACHINE` and MUST default to `false` (user-scoped DPAPI).
 - `useBackwardCompatibility` MAY migrate legacy Credential Manager / `.secure` (Roaming) into DPAPI JSON; default SHOULD be `false`.
 - Legacy `.secure` AES path, when used, SHOULD prefer AES-256-GCM for new writes (AES-128-GCM dual-read as needed for migration).

@@ -3,7 +3,7 @@
 // This must be included before many other Windows headers.
 #include <windows.h>
 #include <wincred.h>
-#include <atlstr.h>
+#include "fss_win_string_utils.h"
 #include <ShlObj_core.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -113,7 +113,7 @@ namespace
 
   // this string is used to filter the credential storage so that only the values written
   // by this plugin shows up.
-  const CA2W CREDENTIAL_FILTER((ELEMENT_PREFERENCES_KEY_PREFIX + '*').c_str());
+  const std::wstring CREDENTIAL_FILTER = FssUtf8ToWide(ELEMENT_PREFERENCES_KEY_PREFIX + '*');
 
   static inline void rtrim(std::wstring& s) {
       s.erase(std::find_if(s.rbegin(), s.rend(), [](wchar_t ch) {
@@ -335,7 +335,7 @@ namespace
       PBYTE AesKey = NULL;
       PCREDENTIALW pcred = NULL;
       // Separate credential name so legacy AES-128 keys remain available for reads.
-      CA2W target_name(("key256_" + ELEMENT_PREFERENCES_KEY_PREFIX).c_str());
+      std::wstring target_name = FssUtf8ToWide("key256_" + ELEMENT_PREFERENCES_KEY_PREFIX);
 
       if (out_size == NULL) {
           return NULL;
@@ -347,11 +347,11 @@ namespace
           return NULL;
       }
 
-      bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
+      bool ok = CredReadW(target_name.c_str(), CRED_TYPE_GENERIC, 0, &pcred);
       if (ok) {
           if (pcred->CredentialBlobSize != AES_256_KEY_SIZE) {
               CredFree(pcred);
-              CredDeleteW(target_name.m_psz, CRED_TYPE_GENERIC, 0);
+              CredDeleteW(target_name.c_str(), CRED_TYPE_GENERIC, 0);
               goto NewKey;
           }
           memcpy(AesKey, pcred->CredentialBlob, AES_256_KEY_SIZE);
@@ -370,7 +370,7 @@ namespace
       }
       CREDENTIALW cred = { 0 };
       cred.Type = CRED_TYPE_GENERIC;
-      cred.TargetName = target_name.m_psz;
+      cred.TargetName = const_cast<LPWSTR>(target_name.c_str());
       cred.CredentialBlobSize = AES_256_KEY_SIZE;
       cred.CredentialBlob = AesKey;
       cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
@@ -389,14 +389,14 @@ namespace
   {
       PBYTE AesKey = NULL;
       PCREDENTIALW pcred = NULL;
-      CA2W target_name(("key_" + ELEMENT_PREFERENCES_KEY_PREFIX).c_str());
+      std::wstring target_name = FssUtf8ToWide("key_" + ELEMENT_PREFERENCES_KEY_PREFIX);
 
       if (out_size == NULL) {
           return NULL;
       }
       *out_size = 0;
 
-      bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
+      bool ok = CredReadW(target_name.c_str(), CRED_TYPE_GENERIC, 0, &pcred);
       if (!ok) {
           return NULL;
       }
@@ -772,8 +772,8 @@ namespace
       if (!fs.good()) {
           //Backwards comp.
           PCREDENTIALW pcred;
-          CA2W target_name(key.c_str());
-          bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
+          std::wstring target_name = FssUtf8ToWide(key);
+          bool ok = CredReadW(target_name.c_str(), CRED_TYPE_GENERIC, 0, &pcred);
           if (ok)
           {
               auto val = std::string((char*)pcred->CredentialBlob);
@@ -866,7 +866,7 @@ namespace
     PCREDENTIALW* pcreds;
     DWORD cred_count = 0;
 
-    bool ok = CredEnumerateW(CREDENTIAL_FILTER.m_psz, 0, &cred_count, &pcreds);
+    bool ok = CredEnumerateW(CREDENTIAL_FILTER.c_str(), 0, &cred_count, &pcreds);
     if (!ok)
     {
         return creds;
@@ -874,7 +874,7 @@ namespace
     for (DWORD i = 0; i < cred_count; i++)
     {
       auto pcred = pcreds[i];
-      std::string target_name = CW2A(pcred->TargetName);
+      std::string target_name = FssWideToUtf8(pcred->TargetName);
       auto val = std::string((char*)pcred->CredentialBlob);
       auto key = this->RemoveKeyPrefix(target_name);
       //If the key exists then data was already read from a file, which implies that the data read from the credential system is outdated
@@ -945,7 +945,7 @@ namespace
     PCREDENTIALW* pcreds;
     DWORD cred_count = 0;
     
-    bool read_ok = CredEnumerateW(CREDENTIAL_FILTER.m_psz, 0, &cred_count, &pcreds);
+    bool read_ok = CredEnumerateW(CREDENTIAL_FILTER.c_str(), 0, &cred_count, &pcreds);
     if (!read_ok)
     {
       auto error = GetLastError();
@@ -978,9 +978,9 @@ namespace
       if (INVALID_FILE_ATTRIBUTES == GetFileAttributes((appSupportPath + L"\\" + wstr + L".secure").c_str())) {
           //Backwards comp.
           PCREDENTIALW pcred;
-          CA2W target_name(key.c_str());
+          std::wstring target_name = FssUtf8ToWide(key);
 
-          bool ok = CredReadW(target_name.m_psz, CRED_TYPE_GENERIC, 0, &pcred);
+          bool ok = CredReadW(target_name.c_str(), CRED_TYPE_GENERIC, 0, &pcred);
           if (ok) return true;
 
           auto error = GetLastError();
